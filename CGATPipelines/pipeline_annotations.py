@@ -806,6 +806,7 @@ def buildGenomeGCProfile(infile, outfile):
         --log=%(outfile)s.log
     | bgzip
     > %(outfile)s'''
+
     P.run()
 
 
@@ -985,6 +986,11 @@ def loadCDSStats(infile, outfile):
 def downloadTranscriptInformation(infile, outfile):
     '''load transcript information.'''
 
+    # If mart is not set, use old fasionhed gtf parsing
+    if not PARAMS["ensembl_biomart_mart"]:
+        PipelineGeneset.loadTranscriptInformation(infile, outfile)
+        return
+
     tablename = P.toTable(outfile)
 
     # only use transcript relevant information. Uniprot ids
@@ -1072,6 +1078,11 @@ def downloadTranscriptInformation(infile, outfile):
        "ensembl.dir/ensembl_to_entrez.load")
 def downloadEntrezToEnsembl(infile, outfile):
     '''load table to convert from ENSEMBL gene ids to entrez gene ids'''
+    
+    if not PARAMS["ensembl_biomart_mart"]:
+        #skip
+        P.touch(outfile)
+        return None
 
     tablename = P.toTable(outfile)
 
@@ -1099,8 +1110,13 @@ def downloadEntrezToEnsembl(infile, outfile):
 def downloadTranscriptSynonyms(infile, outfile):
     '''load table with synonyms for transcript identifiers.'''
 
+    if not PARAMS["ensembl_biomart_mart"]:
+        #skip
+        P.touch(outfile)
+        return None
+        
     tablename = P.toTable(outfile)
-
+    
     columns = {
         "ensembl_transcript_id": "transcript_id",
         "external_transcript_name": "transcript_name",

@@ -1182,8 +1182,7 @@ def downloadTranscriptInformation(infile, outfile):
         "source": "source",
         "status": "gene_status",
         "transcript_status": "transcript_status",
-        "external_gene_id": "gene_name",
-        "transcript_tsl": "transcript_support"
+        "external_gene_id": "gene_name"
     }
 
     data = Biomart.biomart_iterator(

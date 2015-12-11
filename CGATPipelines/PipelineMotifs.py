@@ -862,7 +862,7 @@ def runMAST(infiles, outfile):
         '''
         P.run()
 
-    statement = "gzip <o %(tmpfile)s > %(outfile)s"
+    statement = "gzip < %(tmpfile)s > %(outfile)s"
     P.run()
 
     shutil.rmtree(tmpdir)
@@ -1137,12 +1137,6 @@ def runTomTom(infile, outfile):
     '''compare ab-initio motifs against tomtom.'''
 
     tmpdir = P.getTempDir(".")
-
-    if PARAMS["tomtom_databases"] == "":
-	E.warn("no tomtom databases specified, skipping")
-	P.touch(outfile)
-	return
-
     databases = " ".join(P.asList(PARAMS["tomtom_databases"]))
 
     target_path = os.path.join(
@@ -1244,7 +1238,7 @@ def runDREME(infile, outfile, neg_file = "", options = ""):
     tmpdir = P.getTempDir(".")
 
     statement = '''
-    dreme -p %(infile)s %(neg_file)s -png
+    dreme-patch -p %(infile)s %(neg_file)s -png
         -oc %(tmpdir)s
             %(dreme_options)s
             %(options)s
@@ -1319,6 +1313,12 @@ def runFIMO(motifs, database, outfile, exportdir, options={}):
 def getSeedMotifs(motif_file, tomtom_file, outfile):
 
     ungrouped = MemeMotifFile(IOTools.openFile(motif_file))
+
+    if len(ungrouped) == 0:
+        with IOTools.openFile(outfile, "w") as outf:
+            outf.write(str(ungrouped))
+        return
+
     E.debug("%s: Loaded %i motifs" % (motif_file, len(ungrouped)))
     tomtom = pandas.read_csv(tomtom_file, sep="\t")
     tomtom["Query ID"] = tomtom["Query ID"].astype(str)

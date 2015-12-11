@@ -1119,8 +1119,8 @@ def loadGeneCoordinates(infile, outfile):
 @P.add_doc(PipelineGeneset.loadTranscriptStats)
 @jobs_limit(PARAMS.get("jobs_limit_db", 1), "db")
 @files(
-    (buildExonTranscripts, "ensembl.dir/transcript_stats.load"),
-    (buildCDSTranscripts, "ensembl.dir/cds_stats.load"))
+    ((buildExonTranscripts, "ensembl.dir/transcript_stats.load"),
+     (buildCDSTranscripts, "ensembl.dir/cds_stats.load")))
 def loadTranscriptStats(infile, outfile):
     PipelineGeneset.loadTranscriptStats(infile, outfile)
 
@@ -1483,7 +1483,8 @@ def buildGeneRegions(infile, outfile):
     """
     statement = """
     gunzip < %(infile)s
-    | python %(scriptsdir)s/gtf2gtf.py --method=merge-transcripts --with-utr
+    | python %(scriptsdir)s/gtf2gtf.py
+    --method=merge-transcripts
     --log=%(outfile)s.log
     | python %(scriptsdir)s/gff2bed.py --is-gtf --set-name=gene_id
     --log=%(outfile)s.log
@@ -1593,7 +1594,8 @@ def buildGeneTSS(infile, outfile):
     """
 
     statement = """gunzip < %(infile)s
-    | python %(scriptsdir)s/gtf2gtf.py --method=merge-transcripts --with-utr
+    | python %(scriptsdir)s/gtf2gtf.py
+    --method=merge-transcripts
     --log=%(outfile)s.log
     | python %(scriptsdir)s/gtf2gff.py --method=promotors --promotor-size=1
     --genome-file=%(genome_dir)s/%(genome)s --log=%(outfile)s.log
@@ -1628,7 +1630,8 @@ def buildGeneTTS(infile, outfile):
 
     """
     statement = """gunzip < %(infile)s
-    | python %(scriptsdir)s/gtf2gtf.py --method=merge-transcripts --with-utr
+    | python %(scriptsdir)s/gtf2gtf.py
+    --method=merge-transcripts
     --log=%(outfile)s.log
     | python %(scriptsdir)s/gtf2gff.py --method=tts --promotor-size=1
     --genome-file=%(genome_dir)s/%(genome)s --log=%(outfile)s.log
@@ -2350,7 +2353,7 @@ def buildGeneTerritories(infile, outfile):
     | python %(scriptsdir)s/gtf2gtf.py
     --method=sort --sort-order=gene
     | python %(scriptsdir)s/gtf2gtf.py
-    --method=merge-transcripts --with-utr
+    --method=merge-transcripts
     | python %(scriptsdir)s/gtf2gtf.py
     --method=sort --sort-order=position
     | python %(scriptsdir)s/gtf2gff.py

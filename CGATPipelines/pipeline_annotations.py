@@ -1173,6 +1173,11 @@ def downloadTranscriptInformation(infile, outfile):
         PipelineGeneset.loadTranscriptInformation(infile, outfile)
         return
 
+    # If mart is not set, use old fasionhed gtf parsing
+    if not PARAMS["ensembl_biomart_mart"]:
+        PipelineGeneset.loadTranscriptInformation(infile, outfile)
+        return
+
     tablename = P.toTable(outfile)
 
     # only use transcript relevant information. Uniprot ids

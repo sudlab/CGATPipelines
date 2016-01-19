@@ -533,6 +533,12 @@ class Reconcile(ProcessTool):
 
     prefix = "reconcile"
 
+    # I don't know why this is process where as all the others are
+    # build. Thus I am going to alias build to process
+
+    def build(self, infiles, outfiles, output_prefix):
+        return self.process(infiles, outfiles, output_prefix)
+
     def process(self, infiles, outfiles, output_prefix):
 
         assert len(infiles) == 2

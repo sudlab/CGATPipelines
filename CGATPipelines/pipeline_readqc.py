@@ -311,6 +311,8 @@ if PARAMS.get("preprocessors", None):
                 m.add(PipelinePreprocess.Cutadapt(
                     cutadapt_options,
                     threads=PARAMS["threads"]))
+            elif tool == "reconcile":
+                m.add(PipelinePreprocess.Reconcile())
 
         statement = m.build((infile,), "processed.dir/trimmed-", track)
 

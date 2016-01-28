@@ -507,11 +507,12 @@ def run(**kwargs):
             spec.append("-l %s=%s" % (resource, job_memory))
 
         # if process has multiple threads, use a parallel environment
-        if 'job_threads' in options:
+        multithread = 'job_threads' in options and options['job_threads'] > 1
+        if multithread:
             spec.append(
                 "-pe %(cluster_parallel_environment)s %(job_threads)i -R y")
-        if "cluster_pe_queue" in options and 'job_threads' in options:
-                spec.append(
+        if "cluster_pe_queue" in options and multithread:
+            spec.append(
                     "-q %(cluster_pe_queue)s")
         else:
             spec.append("-q %(cluster_queue)s")

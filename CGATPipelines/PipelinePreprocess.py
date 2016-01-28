@@ -503,19 +503,39 @@ class Cutadapt(ProcessTool):
 
     prefix = "cutadapt"
 
+    def __init__(self, options, threads=1, process_paired=0, *args, **kwargs):
+        self.process_paired = process_paired
+	ProcessTool.__init__(self, options, threads, *args, **kwargs)
+
     def build(self, infiles, outfiles, output_prefix):
         prefix = self.prefix
         processing_options = self.processing_options
 
         assert len(infiles) == len(outfiles)
-
+        
         cmds = []
-        for infile, outfile in zip(infiles, outfiles):
+	if self.process_paired and len(infiles)==2:
+   	    in1, in2 = infiles
+            out1, out2 = outfiles
 
-            cmds.append('''zcat %(infile)s
-            | cutadapt %(processing_options)s -
-            2>> %(output_prefix)s.log
-            | gzip > %(outfile)s;''' % locals())
+            if "fastq" in in1:
+	        format="--format=fastq"
+            elif "fasta" in in1:
+                format="--format=fasta"
+            else:
+                format=""
+
+            cmds.append('''
+            cutadapt %(processing_options)s %(in1)s %(in2)s
+                     -p %(out2)s -o %(out1)s %(format)s
+            2>> %(output_prefix)s.log; '''  %locals())
+	else:
+	    for infile, outfile in zip(infiles, outfiles):
+
+                cmds.append('''zcat %(infile)s
+                | cutadapt %(processing_options)s -
+                2>> %(output_prefix)s.log
+                | gzip > %(outfile)s;''' % locals())
 
         return " checkpoint; ".join(cmds)
 
@@ -546,8 +566,8 @@ class Reconcile(ProcessTool):
 
         cmd = """python %%(scriptsdir)s/fastqs2fastqs.py
         --method=reconcile
-        --output-filename-pattern=%(output_prefix)s.fastq.%%s.gz
-        %(infile1)s %(infile2)s
+        --output-filename-pattern=%(output_prefix)s.fastq.%%%%s.gz
+        %(infile1)s %(infile2)s;
         """ % locals()
 
         return cmd

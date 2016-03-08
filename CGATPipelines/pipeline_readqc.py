@@ -273,7 +273,7 @@ if PARAMS.get("preprocessors", None):
                 PARAMS["trimmomatic_c_thresh"]) + trimmomatic_options
 
         job_threads = PARAMS["threads"]
-        job_memory = "7G"
+        job_memory = "12G"
 
         track = re.match(REGEX_TRACK, infile).groups()[0]
 
@@ -310,7 +310,10 @@ if PARAMS.get("preprocessors", None):
                     cutadapt_options += " -a file:contaminants.fasta "
                 m.add(PipelinePreprocess.Cutadapt(
                     cutadapt_options,
-                    threads=PARAMS["threads"]))
+                    threads=PARAMS["threads"],
+                    process_paired=PARAMS["cutadapt_process_paired"]))
+            elif tool == "reconcile":
+                m.add(PipelinePreprocess.Reconcile(""))
 
         statement = m.build((infile,), "processed.dir/trimmed-", track)
 

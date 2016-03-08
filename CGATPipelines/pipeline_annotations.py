@@ -939,6 +939,7 @@ def buildGenomeGCProfile(infile, outfile):
         --log=%(outfile)s.log
     | bgzip
     > %(outfile)s'''
+
     P.run()
 
 
@@ -963,7 +964,6 @@ def buildCpGBed(infile, outfile):
     '''
 
     job_memory="10G"
-    
     statement = '''
     python %(scriptsdir)s/fasta2bed.py
         --method=cpg
@@ -1168,6 +1168,16 @@ def downloadTranscriptInformation(infile, outfile):
        in mart to output table.
     '''
 
+    # If mart is not set, use old fasionhed gtf parsing
+    if not PARAMS["ensembl_biomart_mart"]:
+        PipelineGeneset.loadTranscriptInformation(infile, outfile)
+        return
+
+    # If mart is not set, use old fasionhed gtf parsing
+    if not PARAMS["ensembl_biomart_mart"]:
+        PipelineGeneset.loadTranscriptInformation(infile, outfile)
+        return
+
     tablename = P.toTable(outfile)
 
     # only use transcript relevant information. Uniprot ids
@@ -1274,6 +1284,11 @@ def downloadEntrezToEnsembl(infile, outfile):
 
     '''
 
+    if not PARAMS["ensembl_biomart_mart"]:
+        #skip
+        P.touch(outfile)
+        return None
+
     tablename = P.toTable(outfile)
 
     columns = {
@@ -1326,8 +1341,13 @@ def downloadTranscriptSynonyms(infile, outfile):
 
     """
 
+    if not PARAMS["ensembl_biomart_mart"]:
+        #skip
+        P.touch(outfile)
+        return None
+        
     tablename = P.toTable(outfile)
-
+    
     columns = {
         "ensembl_transcript_id": "transcript_id",
         "external_transcript_name": "transcript_name",

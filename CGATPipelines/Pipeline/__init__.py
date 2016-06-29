@@ -237,7 +237,6 @@ import Execution as Execution
 import Control as Control
 import Database as Database
 import Files as Files
-import Utils as Utils
 import Parameters as Parameters
 
 # broadcast parameters and config object, take from
@@ -292,7 +291,10 @@ def run_report(clean=True,
     themedir = os.path.join(dirname, "pipeline_docs", "themes")
     relpath = os.path.relpath(docdir)
     trackerdir = os.path.join(docdir, "trackers")
-    job_memory = "4G"
+
+    # warning: memory gets multiplied by threads, so set it not too
+    # high
+    job_memory = "1G"
     job_threads = PARAMS["report_threads"]
 
     # use a fake X display in order to avoid windows popping up
@@ -335,12 +337,13 @@ def run_report(clean=True,
     export PYTHONPATH=%(syspath)s;
     %(xvfb_command)s
     %(report_engine)s-build
-           --num-jobs=%(report_threads)s
-           sphinx-build
-                    -b html
-                    -d %(report_doctrees)s
-                    -c .
-           %(docdir)s %(report_html)s
+    --num-jobs=%(report_threads)s
+    sphinx-build
+    -b html
+    -d %(report_doctrees)s
+    -c .
+    -j %(report_threads)s
+    %(docdir)s %(report_html)s
     >& report.log %(erase_return)s )
     '''
 
@@ -397,6 +400,7 @@ __all__ = [
     "getDatabaseName",
     "importFromIterator",
     # Utils.py
+    "add_doc",
     "isTest",
     "getCallerLocals",
     "getCaller",

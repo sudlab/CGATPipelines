@@ -1,7 +1,8 @@
 from CGATReport.Tracker import Status, SQLError
-from MappingReport import MappingTracker 
+from MappingReport import MappingTracker
 
-class MappingStatus(Status):
+
+class MappingStatus(MappingTracker, Status):
 
     '''status information for mapping stage.'''
 

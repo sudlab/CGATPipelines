@@ -708,6 +708,7 @@ def buildGeneLevelReadCounts(infiles, outfile):
     | gzip
     > %(outfile)s
     '''
+    job_memory = "4G"
 
     P.run()
 

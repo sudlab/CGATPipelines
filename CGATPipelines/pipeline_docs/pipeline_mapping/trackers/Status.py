@@ -1,5 +1,6 @@
 from MappingReport import MappingTracker
 from CGATReport.Tracker import Status, SQLError
+from MappingReport import MappingTracker
 
 
 class MappingStatus(MappingTracker, Status):

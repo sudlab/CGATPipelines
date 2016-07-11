@@ -1281,7 +1281,7 @@ def downloadEntrezToEnsembl(infile, outfile):
     '''
 
     if not PARAMS["ensembl_biomart_mart"]:
-        #skip
+        # skip
         P.touch(outfile)
         return None
 

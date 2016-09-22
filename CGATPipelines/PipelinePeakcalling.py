@@ -834,7 +834,7 @@ def runMACS(infile, outfile,
     statement = '''
     cd %(dir)s;
     checkpoint;
-    macs
+    macs14
     -t %(infile)s
     --diag
     --verbose=10

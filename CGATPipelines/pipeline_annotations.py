@@ -1344,7 +1344,7 @@ def downloadTranscriptSynonyms(infile, outfile):
         return None
 
     tablename = P.toTable(outfile)
-
+    
     columns = {
         "ensembl_transcript_id": "transcript_id",
         "external_transcript_name": "transcript_name",

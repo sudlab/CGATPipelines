@@ -963,7 +963,7 @@ def buildCpGBed(infile, outfile):
       genome.  The BED file is then indexed using tabix
     '''
 
-    job_memory = "5G"
+    job_memory="10G"
     statement = '''
     python %(scriptsdir)s/fasta2bed.py
         --method=cpg
@@ -1188,8 +1188,7 @@ def downloadTranscriptInformation(infile, outfile):
         "source": "source",
         "status": "gene_status",
         "transcript_status": "transcript_status",
-        "external_gene_name": "gene_name",
-        "transcript_tsl": "transcript_support"
+        "external_gene_id": "gene_name"
     }
 
     data = Biomart.biomart_iterator(
@@ -1339,10 +1338,10 @@ def downloadTranscriptSynonyms(infile, outfile):
     """
 
     if not PARAMS["ensembl_biomart_mart"]:
-        # skip
+        #skip
         P.touch(outfile)
         return None
-
+        
     tablename = P.toTable(outfile)
     
     columns = {

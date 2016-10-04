@@ -177,7 +177,7 @@ import numpy
 import xml.etree.ElementTree
 
 from ruffus import *
-from ruffus.task import task_decorator
+from ruffus.combinatorics import *
 
 import CGAT.Experiment as E
 import CGATPipelines.Pipeline as P

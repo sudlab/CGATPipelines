@@ -514,7 +514,7 @@ class Cutadapt(ProcessTool):
         untrimmed = self.untrimmed
 
         assert len(infiles) == len(outfiles)
-
+        
         cmds = []
         if self.process_paired and len(infiles) == 2:
             in1, in2 = infiles

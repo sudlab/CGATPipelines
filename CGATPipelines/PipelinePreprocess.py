@@ -70,7 +70,7 @@ def makeAdaptorFasta(infile, outfile, track, dbh, contaminants_file):
 
     if infile.endswith(".sra"):
         # patch for SRA files, look at multiple tracks
-        f, fastq_format = Sra.peek(infile)
+        f, fastq_format, datatype = Sra.peek(infile)
         if len(f) == 2:
             tracks = [track + "_fastq_1", track + "_fastq_2"]
 
@@ -78,16 +78,16 @@ def makeAdaptorFasta(infile, outfile, track, dbh, contaminants_file):
     for t in tracks:
         table = PipelineTracks.AutoSample(os.path.basename(t)).asTable()
 
+        # if sample name starts with a number, sql table will have
+        # prepended "_"
+        if re.match("^\d+.*", table):
+            table = "_" + table
+
         query = '''SELECT Possible_Source, Sequence FROM
         %s_fastqc_Overrepresented_sequences;''' % table
 
         cc = dbh.cursor()
-        try:
-            found_contaminants.extend(cc.execute(query).fetchall())
-        except sqlite3.OperationalError, msg:
-            print msg
-            # empty table
-            continue
+        found_contaminants.extend(cc.execute(query).fetchall())
 
     if len(found_contaminants) == 0:
         P.touch(outfile)
@@ -506,7 +506,7 @@ class Cutadapt(ProcessTool):
 
     def __init__(self, options, threads=1, process_paired=0, *args, **kwargs):
         self.process_paired = process_paired
-	ProcessTool.__init__(self, options, threads, *args, **kwargs)
+        ProcessTool.__init__(self, options, threads, *args, **kwargs)
 
     def build(self, infiles, outfiles, output_prefix):
         prefix = self.prefix
@@ -516,28 +516,50 @@ class Cutadapt(ProcessTool):
         assert len(infiles) == len(outfiles)
         
         cmds = []
-	if self.process_paired and len(infiles)==2:
-   	    in1, in2 = infiles
+        if self.process_paired and len(infiles) == 2:
+            in1, in2 = infiles
             out1, out2 = outfiles
 
             if "fastq" in in1:
-	        format="--format=fastq"
+                format = "--format=fastq"
             elif "fasta" in in1:
-                format="--format=fasta"
+                format = "--format=fasta"
             else:
-                format=""
+                format = ""
+
+            untrimmed_output1, untrimmed_output2 = \
+                [i.replace(".fast", "_untrimmed.fast")
+                 for i in infiles]
+
+            if untrimmed:
+                processing_options += \
+                    "--untrimmed-output=%(untrimmed_output1)s" \
+                    "--untrimmed-output-paired=%(untrimmed_output2)s" % locals()
 
             cmds.append('''
             cutadapt %(processing_options)s %(in1)s %(in2)s
                      -p %(out2)s -o %(out1)s %(format)s
-            2>> %(output_prefix)s.log; '''  %locals())
-	else:
-	    for infile, outfile in zip(infiles, outfiles):
+            2>> %(output_prefix)s.log; ''' % locals())
+
+            if untrimmed:
+                cmds.append("gzip %s;" % untrimmed_output1)
+                cmds.append("gzip %s;" % untrimmed_output2)
+
+        else:
+            for infile, outfile in zip(infiles, outfiles):
+                outfile_untrimmed = outfile.replace(".fastq",
+                                                    "_untrimmed.fastq")
+                if untrimmed:
+                    processing_options += " --untrimmed-output=%s" % \
+                        outfile_untrimmed
 
                 cmds.append('''zcat %(infile)s
                 | cutadapt %(processing_options)s -
                 2>> %(output_prefix)s.log
                 | gzip > %(outfile)s;''' % locals())
+
+                if untrimmed:
+                    cmds.append("gzip %s;" % outfile_untrimmed)
 
         return " checkpoint; ".join(cmds)
 

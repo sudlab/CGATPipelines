@@ -368,8 +368,8 @@ def run(**kwargs):
     options.update(kwargs.items())
 
     # insert a few legacy synonyms
-    options['cluster_options'] = options.get('job_options',
-                                             options['cluster_options'])
+    options['cluster_options'] += " " + options.get('job_options',
+                                                    "")
     options['cluster_queue'] = options.get('job_queue',
                                            options['cluster_queue'])
     options['without_cluster'] = options.get('without_cluster')

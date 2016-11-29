@@ -640,7 +640,7 @@ else:
 def buildKallistoIndex(infile, outfile):
     ''' build a kallisto index'''
 
-    job_memory = "2G"
+    job_memory = "8G"
 
     statement = '''
     kallisto index -i %(outfile)s -k %(kallisto_kmer)s %(infile)s
@@ -655,7 +655,7 @@ def buildKallistoIndex(infile, outfile):
 def buildSalmonIndex(infile, outfile):
     ''' build a salmon index'''
 
-    job_memory = "2G"
+    job_memory = "8G"
 
     statement = '''
     salmon index %(salmon_index_options)s -t %(infile)s -i %(outfile)s

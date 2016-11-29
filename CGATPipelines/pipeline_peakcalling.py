@@ -469,7 +469,8 @@ def connect():
 
     dbh = sqlite3.connect(PARAMS["database_name"])
     statement = '''ATTACH DATABASE '%s' as annotations''' % (
-        PARAMS["annotations_database"])
+        os.path.join(PARAMS["annotations_dir"],
+                     PARAMS["annotations_database"]))
     cc = dbh.cursor()
     cc.execute(statement)
     cc.close()
@@ -533,9 +534,10 @@ def prepareBAMForPeakCalling(infile, outfile):
 
     '''
     if PARAMS["calling_filter_regions"]:
+
+        mask = PARAMS["calling_filter_regions"]
         if not os.path.exists(mask):
             raise IOError("filter file '%s' does not exist")
-        mask = PARAMS["calling_filter_regions"]
     else:
         mask = None
 

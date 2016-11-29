@@ -29,6 +29,7 @@ Pipeline transcriptdiffexpression
 :Date: |today|
 :Tags: Python
 
+To do: update documentation and pipeline.ini. e.g supports sailfish too!
 
 Overview
 ========
@@ -58,9 +59,34 @@ allows the user to fit a transcript-wise general linear model to the
 expression data to identify transcripts which are signficantly
 differentially expressed.
 
-These tools require a reference transcript geneset which can either be
-user-supplied (*.gtf.gz) or generated from the output of
-pipeline_annotations.py with user-defined filtering.
+These tools require a reference transcript geneset. The easiest way to
+generate this is to use the 'auto-generate' method (see pipeline.ini)
+which uses the output of pipeline_annotations.py with user-defined
+filtering. Alternatively, the geneset may be user-supplied (must be
+called 'geneset.fa'). If you're not using the 'auto-generate' option
+and you want to perform the simulation with a pre-mRNA fraction
+included, you must also include a 'geneset_pre_mrna.fa' geneset with
+pre-mRNA sequences.
+
+To generate a geneset multi-fasta from a gtf, use the following:
+
+       zcat geneset.gtf |
+        awk '$3=="exon"'|
+        python %(scriptsdir)s/gff2fasta.py
+        --is-gtf --genome-file=genome.fa --fold-at=60 -v 0
+        --log=geneset.fa.log > geneset.fa;
+        samtools faidx geneset.fa
+        '''
+
+To generate a geneset multi-fasta of pre-mRNAs from a gtf, use the following:
+
+        zcat geneset.gtf |
+        awk '$3 == "transcript"'|
+        python %(scriptsdir)s/gff2fasta.py
+        --is-gtf --genome-file=genome.fa --fold-at 60 -v 0
+        --log=geneset_pre_mrna.fa.log > geneset_pre_mrna.fa;
+        samtools faidx geneset_pre_mrna.fa
+
 
 Prior to the sample quantification, reads are simulated from the gene
 set. This is a naive RNA-Seq simulation which does not simulate the
@@ -220,22 +246,19 @@ Code
 
 # add option to remove flagged transcripts from gene set
 
-# enable sleuth DE analysis after salmon quantification
-
 from ruffus import *
+from ruffus.combinatorics import *
 
 import sys
 import os
 import sqlite3
 import glob
-import subprocess
 import pandas as pd
 import numpy as np
-import random
+import itertools
 
 import CGAT.Experiment as E
 import CGAT.IOTools as IOTools
-import CGAT.Counts as Counts
 import CGAT.Expression as Expression
 
 import CGATPipelines.Pipeline as P
@@ -318,18 +341,33 @@ Sample = PipelineTracks.AutoSample
 DESIGNS = PipelineTracks.Tracks(Sample).loadFromDirectory(
     glob.glob("*.design.tsv"), "(\S+).design.tsv")
 
-GENESET = glob.glob("*.gtf.gz")
+###############################################################################
+# load designs
+###############################################################################
 
+
+@transform(["%s.design.tsv" % x.asFile() for x in DESIGNS],
+           suffix(".tsv"),
+           ".load")
+def loadDesigns(infile, outfile):
+    '''load design files into database'''
+    # note group column needs renaming
+
+    tmpfile = P.getTempFilename("/ifs/scratch")
+
+    statement = "sed 's/group/_group/g' %(infile)s > %(tmpfile)s"
+    P.run()
+
+    P.load(tmpfile, outfile)
+    os.unlink(tmpfile)
 
 ###############################################################################
-# Create kallisto index
+# Create geneset
 ###############################################################################
 
 if PARAMS["geneset_auto_generate"]:
 
-    # TS:
-    # to do: should we enable filtering by the transcript_biotype rather
-    # than gene_biotype?
+    # TS: move to module file?
     @mkdir("index.dir")
     @originate("index.dir/transcript_ids.tsv")
     def identifyTranscripts(outfile):
@@ -352,43 +390,161 @@ if PARAMS["geneset_auto_generate"]:
 
         if PARAMS["geneset_transcript_support"]:
 
-            # TS: TSL is not given for all transcripts. Filtering here
-            # will retain transcripts without TSL annotation
+            if PARAMS["geneset_random_removal"]:
+                # if using random removal we don't want to filter on
+                # transcript support here
+                pass
 
-            # TS: I'm using substr because the tsl values also describe
-            # the previous tsl and we only want the current tsl
-            support_cmd = " OR ".join(
-                ["substr(transcript_support,1,4) = 'tsl%s'" % x
-                 for x in range(1, PARAMS["geneset_transcript_support"] + 1)])
+            else:
+                # TS: TSL is not given for all transcripts. Filtering here
+                # will retain transcripts without TSL annotation
 
-            # ensembl transcript support not given (e.g "NA") for
-            # pseudogenes, single exon transcripts, HLA, T-cell
-            # receptor, Ig transcripts.  Do we want to keep these in?
-            na_support_cmd = "substr(transcript_support,1,2) = 'NA' "
+                # TS: I'm using substr because the tsl values also describe
+                # the previous tsl and we only want the current tsl
+                support_cmd = " OR ".join(
+                    ["substr(transcript_support,1,4) = 'tsl%s'" % x
+                     for x in range(1, PARAMS["geneset_transcript_support"] + 1)])
 
-            null_support_cmd = "transcript_support IS NULL"
+                # ensembl transcript support not given (e.g "NA") for
+                # pseudogenes, single exon transcripts, HLA, T-cell
+                # receptor, Ig transcripts.  Do we want to keep these in?
+                na_support_cmd = "substr(transcript_support,1,5) = 'tslNA' "
 
-            where_cmd += " AND (%s OR %s OR %s )" % (support_cmd,
-                                                     na_support_cmd,
-                                                     null_support_cmd)
+                null_support_cmd = "transcript_support IS NULL"
 
-        select_cmd = """ SELECT DISTINCT transcript_id
-        FROM annotations.%(table)s %(where_cmd)s""" % locals()
+                where_cmd += " AND (%s OR %s OR %s )" % (support_cmd,
+                                                         na_support_cmd,
+                                                         null_support_cmd)
 
-        print select_cmd
+        if PARAMS["geneset_random_removal"]:
+            # TS:this section is for testing null random removal of transcripts
+            # perform random removal of transcripts
+            # remove the equivalent number as would be removed by
+            # transcript support level filtering
+            # note: in line with above, transcripts with tsl = NA are retained
 
-        select = dbh.execute(select_cmd)
+            select_cmd = """ SELECT DISTINCT gene_id, transcript_id,
+            transcript_support FROM annotations.%(table)s %(where_cmd)s
+            """ % locals()
 
-        with IOTools.openFile(outfile, "w") as outf:
-            outf.write("transcript_id\n")
-            outf.write("\n".join((x[0] for x in select)) + "\n")
+            select = dbh.execute(select_cmd)
+
+            previous_gene = ""
+            transcript_ids = []
+            tsls = []
+
+            # TS: remove these counts when this section has been checked...
+            n_entries = 0
+            n_transcripts = 0
+            n_genes = 0
+            n_low_support = 0
+            n_high_support = 0
+            tsl_NA = 0
+            tsl_NULL = 0
+
+            with IOTools.openFile(outfile, "w") as outf:
+                outf.write("transcript_id\n")
+
+                for entry in select:
+
+                    n_entries += 1
+
+                    gene_id, transcript_id, tsl = entry
+
+                    if gene_id == previous_gene:
+                        n_transcripts += 1
+
+                        transcript_ids.append(transcript_id)
+
+                        # some transcripts do not have a tsl
+                        try:
+
+                            tsls.append(int(tsl.strip().split()[0].replace("tsl", "")))
+                        except:
+                            if tsl is None:
+                                tsl_NULL += 1
+                            else:
+                                if tsl.strip().split()[0] == "tslNA":
+                                    tsl_NA += 1
+
+                    else:
+                        count_below_threshold = len(
+                            [x for x in tsls if x >
+                             PARAMS["geneset_transcript_support"]])
+                        count_above_threshold = len(
+                            [x for x in tsls if x <=
+                             PARAMS["geneset_transcript_support"]])
+                        n_low_support += count_below_threshold
+                        n_high_support += count_above_threshold
+                        if count_below_threshold > 0:
+                            # randomly remove transcripts
+
+                            transcript_ids = np.random.choice(
+                                transcript_ids,
+                                size=len(transcript_ids) - count_below_threshold,
+                                replace=False)
+
+                        # for some gene_ids, all transcripts may be removed!
+                        if len(transcript_ids) > 0:
+                            outf.write("\n".join((x for x in transcript_ids)) + "\n")
+
+                        previous_gene = gene_id
+                        transcript_ids = [transcript_id]
+                        try:
+                            tsls = [int(tsl.strip().split()[0].replace("tsl", ""))]
+                        except:
+                            tsls = []
+                            if tsl is None:
+                                tsl_NULL += 1
+                            else:
+                                if tsl.strip().split()[0] == "tslNA":
+                                    tsl_NA += 1
+
+                        n_transcripts += 1
+                        n_genes += 1
+
+                # random select again for the last gene_id
+                count_below_threshold = len(
+                    [x for x in tsls if x >
+                     PARAMS["geneset_transcript_support"]])
+                count_above_threshold = len(
+                    [x for x in tsls if x <=
+                     PARAMS["geneset_transcript_support"]])
+                n_low_support += count_below_threshold
+                n_high_support += count_above_threshold
+
+                if count_below_threshold > 0:
+
+                    transcript_ids = np.random.choice(
+                        transcript_ids,
+                        size=len(transcript_ids)-count_below_threshold,
+                        replace=False)
+
+                if len(transcript_ids) > 0:
+                    outf.write("\n".join((x for x in transcript_ids)))
+
+            print ("# entries %i, # transcripts %i, # genes %i,"
+                   "# low support %i, # high support %i,"
+                   " # NA tsl %i, # NULL tsl %i" % (
+                       n_entries, n_transcripts, n_genes, n_low_support,
+                       n_high_support, tsl_NA, tsl_NULL))
+
+        else:
+            # select all distinct transcript_ids passing filters
+            select_cmd = """ SELECT DISTINCT transcript_id
+            FROM annotations.%(table)s %(where_cmd)s""" % locals()
+
+            select = dbh.execute(select_cmd)
+
+            with IOTools.openFile(outfile, "w") as outf:
+                outf.write("transcript_id\n")
+                outf.write("\n".join((x[0] for x in select)) + "\n")
 
     @transform(identifyTranscripts,
                regex("index.dir/transcript_ids.tsv"),
                "index.dir/transcripts.gtf.gz")
     def buildGeneSet(mapfile, outfile):
-        ''' build a gene set with only transcripts from transcripts which
-        pass filter '''
+        ''' build a gene set with only transcripts which pass filter '''
 
         geneset = PARAMS['annotations_interface_geneset_all_gtf']
 
@@ -404,39 +560,78 @@ if PARAMS["geneset_auto_generate"]:
         '''
         P.run()
 
+    @transform(buildGeneSet,
+               suffix(".gtf.gz"),
+               ".fa")
+    def buildReferenceTranscriptome(infile, outfile):
+        ''' build reference transcriptome from geneset'''
+
+        genome_file = os.path.abspath(
+            os.path.join(PARAMS["genome_dir"], PARAMS["genome"] + ".fa"))
+
+        statement = '''
+        zcat %(infile)s |
+        awk '$3=="exon"'|
+        python %(scriptsdir)s/gff2fasta.py
+        --is-gtf --genome-file=%(genome_file)s --fold-at=60 -v 0
+        --log=%(outfile)s.log > %(outfile)s;
+        samtools faidx %(outfile)s
+        '''
+        P.run()
+
+    @transform(buildGeneSet,
+               suffix(".gtf.gz"),
+               ".pre_mRNA.fa")
+    def buildReferencePreTranscriptome(infile, outfile):
+        ''' build a reference transcriptome for pre-mRNAs'''
+
+        if PARAMS['simulation_pre_mrna_fraction']:
+            genome_file = os.path.abspath(
+                os.path.join(PARAMS["genome_dir"], PARAMS["genome"] + ".fa"))
+
+            statement = '''
+            zcat %(infile)s |
+            awk '$3 == "transcript"'|
+            python %(scriptsdir)s/gff2fasta.py
+            --is-gtf --genome-file=%(genome_file)s --fold-at 60 -v 0
+            --log=%(outfile)s.log > %(outfile)s;
+            samtools faidx %(outfile)s
+            '''
+            P.run()
+
+        else:
+            P.touch(outfile)
+
+
 else:
     # if a reference gtf is provided, just soft link to this
-    assert len(GENESET) > 0, ("if not auto generating a geneset, you must"
-                              "provide a geneset in a *.gtf.gz file")
+    assert os.path.exists("geneset.fa") > 0, (
+        "if not auto generating a geneset, you must"
+        "provide a geneset in a geneset.fa file")
 
     @mkdir("index.dir")
-    @files(GENESET[0], "index.dir/transcripts.gtf.gz")
-    def buildGeneSet(infile, outfile):
+    @files("geneset.fa", "index.dir/transcripts.fa")
+    def buildReferenceTranscriptome(infile, outfile):
         ''' link to the geneset provided'''
         P.clone(os.path.abspath(infile), os.path.abspath(outfile))
 
+    @mkdir("index.dir")
+    @files("geneset.fa", "index.dir/transcripts.pre_mRNA.fa")
+    def buildReferencePreTranscriptome(infile, outfile):
+        ''' build a reference transcriptome for pre-mRNAs'''
+        if PARAMS['simulation_pre_mrna_fraction']:
+            assert os.path.exists("geneset_pre_mRNA.fa") > 0, (
+                "if not auto generating a geneset and simulating with"
+                " a pre-mRNA fraction, you must provide a 'pre-mrna'"
+                " geneset in a 'geneset_pre_mRNA.fa' file")
+            P.clone(os.path.abspath(infile), os.path.abspath(outfile))
 
-@transform(buildGeneSet,
-           suffix(".gtf.gz"),
-           ".fa")
-def buildReferenceTranscriptome(infile, outfile):
-    ''' build reference transcriptome from geneset'''
+        else:
+            P.touch(outfile)
 
-    gtf_file = P.snip(infile, ".gz")
-
-    genome_file = os.path.abspath(
-        os.path.join(PARAMS["genome_dir"], PARAMS["genome"] + ".fa"))
-
-    # sed statement replaces e.g ">1 transcript_id" with ">transcript_id"
-    statement = '''
-    zcat %(infile)s
-    | awk '$3 ~ /exon|UTR/' > %(gtf_file)s;
-    gtf_to_fasta %(gtf_file)s %(genome_file)s %(outfile)s;
-    sed -i 's/>[0-9]\+ />/g' %(outfile)s;
-    checkpoint;
-    samtools faidx %(outfile)s
-    '''
-    P.run()
+###############################################################################
+# build indexes
+###############################################################################
 
 
 @transform(buildReferenceTranscriptome,
@@ -444,6 +639,8 @@ def buildReferenceTranscriptome(infile, outfile):
            ".kallisto.index")
 def buildKallistoIndex(infile, outfile):
     ''' build a kallisto index'''
+
+    job_memory = "2G"
 
     statement = '''
     kallisto index -i %(outfile)s -k %(kallisto_kmer)s %(infile)s
@@ -458,16 +655,39 @@ def buildKallistoIndex(infile, outfile):
 def buildSalmonIndex(infile, outfile):
     ''' build a salmon index'''
 
+    job_memory = "2G"
+
     statement = '''
     salmon index %(salmon_index_options)s -t %(infile)s -i %(outfile)s
+    -k %(salmon_kmer)s
+    '''
+
+    P.run()
+
+
+@transform(buildReferenceTranscriptome,
+           suffix(".fa"),
+           ".sailfish.index")
+def buildSailfishIndex(infile, outfile):
+    ''' build a sailfish index'''
+
+    # sailfish indexing is more memory intensive than Salmon/Kallisto
+    job_memory = "6G"
+
+    statement = '''
+    sailfish index --transcripts=%(infile)s --out=%(outfile)s
+    --kmerSize=%(sailfish_kmer)s
+    %(sailfish_index_options)s
     '''
 
     P.run()
 
 
 @follows(mkdir("index.dir"),
+         buildReferencePreTranscriptome,
          buildKallistoIndex,
-         buildSalmonIndex)
+         buildSalmonIndex,
+         buildSailfishIndex)
 def index():
     pass
 
@@ -475,327 +695,364 @@ def index():
 ###############################################################################
 # Simulation
 ###############################################################################
-@mkdir("simulation.dir")
-@transform(buildReferenceTranscriptome,
-           suffix(".fa"),
-           "_kmers.tsv",
-           output_dir="simulation.dir")
-def countKmers(infile, outfile):
-    ''' count the number of unique and non-unique kmers per transcript '''
+# if not simulating, final task ('simulation') is empty
+if PARAMS['simulation_run']:
 
-    job_memory = PARAMS["simulation_kmer_memory"]
+    @mkdir("simulation.dir")
+    @transform(buildReferenceTranscriptome,
+               suffix(".fa"),
+               "_kmers.tsv",
+               output_dir="simulation.dir")
+    def countKmers(infile, outfile):
+        ''' count the number of unique and non-unique kmers per transcript '''
 
-    statement = '''
-    python %(scriptsdir)s/fasta2unique_kmers.py --input-fasta=%(infile)s
-    --kmer-size=%(kallisto_kmer)s -L %(outfile)s.log > %(outfile)s '''
+        job_memory = PARAMS["simulation_kmer_memory"]
 
-    P.run()
+        statement = '''
+        python %(scriptsdir)s/fasta2unique_kmers.py --input-fasta=%(infile)s
+        --kmer-size=%(kallisto_kmer)s -L %(outfile)s.log > %(outfile)s '''
 
+        P.run()
 
-@mkdir("simulation.dir")
-@follows(buildReferenceTranscriptome)
-@files([("index.dir/transcripts.fa",
-         ("simulation.dir/simulated_reads_%i.fastq.1.gz" % x,
-          "simulation.dir/simulated_read_counts_%i.tsv" % x))
-        for x in range(0, PARAMS["simulation_iterations"])])
-def simulateRNASeqReads(infile, outfiles):
-    ''' simulate RNA-Seq reads from the transcripts fasta file '''
+    @transform(countKmers,
+               suffix(".tsv"),
+               ".load")
+    def loadKmers(infile, outfile):
+        ''' load the kmer counts'''
 
-    # TS: to do: add option to learn parameters from real RNA-Seq data
-    # TS: move to module file. the statement is complicated by
-    # neccesity for random order for some simulations
-    outfile, outfile_counts = outfiles
+        options = "--add-index=id"
+        P.load(infile, outfile, options=options)
 
-    single_end_random_cmd = ""
-    paired_end_random_cmd = ""
+    @mkdir("simulation.dir")
+    @follows(buildReferenceTranscriptome,
+             buildReferencePreTranscriptome)
+    @files([(["index.dir/transcripts.fa",
+             "index.dir/transcripts.pre_mRNA.fa"],
+             ("simulation.dir/simulated_reads_%i.fastq.1.gz" % x,
+              "simulation.dir/simulated_read_counts_%i.tsv" % x))
+            for x in range(0, PARAMS["simulation_iterations"])])
+    def simulateRNASeqReads(infiles, outfiles):
+        ''' simulate RNA-Seq reads from the transcripts fasta file
+        and transcripts pre-mRNA fasta file'''
 
-    if PARAMS["simulation_paired"]:
-        outfile2 = outfile.replace(".1.gz", ".2.gz")
-        options = '''
-        --output-paired-end
-        --output-fastq2=%(outfile2)s ''' % locals()
+        # TS: to do: add option to learn parameters from real RNA-Seq data
+        # TS: move to module file. the statement is complicated by
+        # neccesity for random order for some simulations
+        infile, premrna_fasta = infiles
+        outfile, outfile_counts = outfiles
+
+        single_end_random_cmd = ""
+        paired_end_random_cmd = ""
+
+        if PARAMS["simulation_paired"]:
+            outfile2 = outfile.replace(".1.gz", ".2.gz")
+            options = '''
+            --output-paired-end
+            --output-fastq2=%(outfile2)s ''' % locals()
+
+            if PARAMS["simulation_random"]:
+
+                # need to randomised order but keep pairs in same position
+                tmp_fastq1 = P.getTempFilename()
+                tmp_fastq2 = P.getTempFilename()
+
+                # randomise fastqs, gzip and replace
+                paired_end_random_cmd = '''
+                ; checkpoint ;
+                paste <(zcat %(outfile)s) <(zcat %(outfile2)s) |
+                paste - - - - | sort -R |
+                awk -F'\\t' '{OFS="\\n"; print $1,$3,$5,$7 > "%(tmp_fastq1)s";
+                print $2,$4,$6,$8 > "%(tmp_fastq2)s"}'; checkpoint ;
+                rm -rf %(outfile)s %(outfile2)s; checkpoint;
+                gzip -c %(tmp_fastq1)s > %(outfile)s; checkpoint;
+                gzip -c %(tmp_fastq2)s > %(outfile2)s
+                ''' % locals()
+
+                os.unlink(tmp_fastq1)
+                os.unlink(tmp_fastq2)
+
+        else:
+            options = ""
+
+            if PARAMS["simulation_random"]:
+                single_end_random_cmd = '''
+                paste - - - - | sort -R | sed 's/\\t/\\n/g'| '''
 
         if PARAMS["simulation_random"]:
-
-            # need to randomised order but keep pairs in same position
-            tmp_fastq1 = P.getTempFilename()
-            tmp_fastq2 = P.getTempFilename()
-
-            # randomise fastqs, gzip and replace
-            paired_end_random_cmd = '''
-            ; checkpoint ;
-            paste <(zcat %(outfile)s) <(zcat %(outfile2)s) |
-            paste - - - - | sort -R |
-            awk -F'\\t' '{OFS="\\n"; print $1,$3,$5,$7 > "%(tmp_fastq1)s";
-            print $2,$4,$6,$8 > "%(tmp_fastq2)s"}'; checkpoint ;
-            rm -rf %(outfile)s %(outfile2)s; checkpoint;
-            gzip -c %(tmp_fastq1)s > %(outfile)s; checkpoint;
-            gzip -c %(tmp_fastq2)s > %(outfile2)s
-            ''' % locals()
-
-            os.unlink(tmp_fastq1)
-            os.unlink(tmp_fastq2)
-
-    else:
-        options = ""
-
-        if PARAMS["simulation_random"]:
-            single_end_random_cmd = '''
-            paste - - - - | sort -R | sed 's/\\t/\\n/g'| '''
-
-    if PARAMS["simulation_random"]:
-        job_memory = "4G"
-    else:
-        job_memory = "1G"
-
-    statement = '''
-    cat %(infile)s |
-    python %(scriptsdir)s/fasta2fastq.py
-    --output-read-length=%(simulation_read_length)s
-    --insert-length-mean=%(simulation_insert_mean)s
-    --insert-length-sd=%(simulation_insert_sd)s
-    --reads-per-entry-min=%(simulation_min_reads_per_transcript)s
-    --reads-per-entry-max=%(simulation_max_reads_per_transcript)s
-    --sequence-error-phred=%(simulation_phred)s
-    --output-counts=%(outfile_counts)s
-    --output-quality-format=33 -L %(outfile)s.log
-    %(options)s | %(single_end_random_cmd)s
-    gzip > %(outfile)s %(paired_end_random_cmd)s'''
-
-    job_memory = "2G"
-
-    P.run()
-
-
-@mkdir("simulation.dir/quant.dir/kallisto")
-@transform(simulateRNASeqReads,
-           regex("simulation.dir/simulated_reads_(\d+).fastq.1.gz"),
-           add_inputs(buildKallistoIndex),
-           r"simulation.dir/quant.dir/kallisto/simulated_reads_\1/abundance.h5")
-def quantifyWithKallistoSimulation(infiles, outfile):
-    ''' quantify trancript abundance from simulated reads with kallisto'''
-
-    # TS more elegant way to parse infiles and index?
-    infiles, index = infiles
-    infile, counts = infiles
-
-    # multithreading not supported until > v0.42.1
-    # job_threads = PARAMS["kallisto_threads"]
-    job_threads = 1
-    job_memory = "6G"
-
-    kallisto_options = PARAMS["kallisto_options"]
-
-    # single bootstrap should be fine for our purposes
-    bootstrap = 1
-
-    m = PipelineMapping.Kallisto()
-    statement = m.build((infile,), outfile)
-
-    P.run()
-
-
-@transform(quantifyWithKallistoSimulation,
-           suffix(".h5"),
-           ".tsv")
-def extractKallistoCountSimulation(infile, outfile):
-    ''' run kalliso h5dump to extract txt file'''
-
-    outfile_dir = os.path.dirname(os.path.abspath(infile))
-
-    statement = '''kallisto h5dump -o %(outfile_dir)s %(infile)s'''
-
-    P.run()
-
-
-@mkdir("simulation.dir/quant.dir/salmon")
-@transform(simulateRNASeqReads,
-           regex("simulation.dir/simulated_reads_(\d+).fastq.1.gz"),
-           add_inputs(buildSalmonIndex),
-           r"simulation.dir/quant.dir/salmon/simulated_reads_\1/quant.sf")
-def quantifyWithSalmonSimulation(infiles, outfile):
-    # TS more elegant way to parse infiles and index?
-    infiles, index = infiles
-    infile, counts = infiles
-
-    # job_threads = PARAMS["salmon_threads"]
-    job_threads = 1
-    job_memory = "6G"
-
-    salmon_options = PARAMS["salmon_options"]
-    salmon_libtype = "ISF"
-
-    # single bootstrap should be fine for our purposes
-    bootstrap = 1
-
-    m = PipelineMapping.Salmon()
-    statement = m.build((infile,), outfile)
-
-    P.run()
-
-
-@transform(quantifyWithSalmonSimulation,
-           regex("(\S+)/quant.sf"),
-           r"\1/abundance.tsv")
-def extractSalmonCountSimulation(infile, outfile):
-    ''' rename columns and remove comment to keep file format the same
-    as kallisto'''
-
-    # note: this expects column order to stay the same
-
-    with IOTools.openFile(infile, "r") as inf:
-        lines = inf.readlines()
-
-        with IOTools.openFile(outfile, "w") as outf:
-            outf.write("%s\n" % "\t".join(
-                ("target_id", "length", "tpm", "est_counts")))
-
-            for line in lines:
-                if not line.startswith("# "):
-                    outf.write(line)
-
-
-# define simulation targets
-SIMTARGETS = []
-
-mapToSimulationTargets = {'kallisto': (quantifyWithKallistoSimulation,
-                                       extractKallistoCountSimulation),
-                          'salmon': (quantifyWithSalmonSimulation,
-                                     extractSalmonCountSimulation)}
-
-for x in P.asList(PARAMS["quantifiers"]):
-    SIMTARGETS.extend(mapToSimulationTargets[x])
-
-
-@follows(*SIMTARGETS)
-def quantifySimulation():
-    pass
-
-
-@transform(SIMTARGETS,
-           regex("simulation.dir/quant.dir/(\S+)/simulated_reads_(\d+)/abundance.tsv"),
-           r"simulation.dir/quant.dir/\1/simulated_reads_\2/results.tsv",
-           r"simulation.dir/simulated_read_counts_\2.tsv")
-def mergeAbundanceCounts(infile, outfile, counts):
-    ''' merge the abundance and simulation counts files for
-    each simulation '''
-
-    df_abund = pd.read_table(infile, sep="\t", index_col=0)
-    df_counts = pd.read_table(counts, sep="\t", index_col=0)
-
-    df_merge = pd.merge(df_abund, df_counts, left_index=True, right_index=True)
-    df_merge.index.name = "id"
-    df_merge.to_csv(outfile, sep="\t")
-
-
-@collate(mergeAbundanceCounts,
-         regex("simulation.dir/quant.dir/(\S+)/simulated_reads_\d+/results.tsv"),
-         r"simulation.dir/\1_simulation_results.tsv")
-def concatSimulationResults(infiles, outfile):
-    ''' concatenate all simulation results '''
-
-    df = pd.DataFrame()
-
-    for inf in infiles:
-        df_tmp = pd.read_table(inf, sep="\t")
-        df = pd.concat([df, df_tmp], ignore_index=True)
-
-    df.to_csv(outfile, sep="\t", index=False)
-
-
-@transform(concatSimulationResults,
-           suffix("results.tsv"),
-           add_inputs(countKmers),
-           "correlations.tsv")
-def calculateCorrelations(infiles, outfile):
-    ''' calculate correlation across simulation iterations per transcript'''
-
-    abund, kmers = infiles
-
-    df_abund = pd.read_table(abund, sep="\t", index_col=0)
-    df_kmer = pd.read_table(kmers, sep="\t", index_col=0)
-
-    # this is hacky, it's doing all against all correlations for the
-    # two columns and subsetting
-    df_agg = df_abund.groupby(level=0)[[
-        "est_counts", "read_count"]].corr().ix[0::2, 'read_count']
-
-    # drop the "read_count" level, make into dataframe and rename column
-    df_agg.index = df_agg.index.droplevel(1)
-    df_agg = pd.DataFrame(df_agg)
-    df_agg.columns = ["cor"]
-
-    # merge and bin the unique fraction values
-    df_final = pd.merge(df_kmer, df_agg, left_index=True, right_index=True)
-    df_final['fraction_bin'] = (
-        np.digitize(df_final["fraction_unique"]*100, bins=range(0, 100, 1),
-                    right=True))/100.0
-
-    df_abund_sum = df_abund.groupby(level=0)["est_counts", "read_count"].sum()
-    df_final = pd.merge(df_final, df_abund_sum,
-                        left_index=True, right_index=True)
-    df_final['log2diff'] = np.log2(df_final['est_counts'] /
-                                   df_final['read_count'])
-
-    df_final['log2diff_thres'] = [x if abs(x) < 1 else x/abs(x)
-                                  for x in df_final['log2diff']]
-
-    df_final.to_csv(outfile, sep="\t", index=True)
-
-
-@transform(calculateCorrelations,
-           suffix(".tsv"),
-           ".load")
-def loadCorrelation(infile, outfile):
-    ''' load the correlations data table'''
-    P.load(infile, outfile)
-
-
-@transform(calculateCorrelations,
-           regex("simulation.dir/(\S+)_simulation_correlations.tsv"),
-           r"simulation.dir/\1_flagged_transcripts.tsv")
-def identifyLowConfidenceTranscript(infile, outfile):
-    '''
-    identify the transcripts which cannot be confidently quantified
-    these fall into two categories:
-
-    1. Transcripts whose with poor accuracy of estimated counts
-
-       - transcripts with >2 absolute fold difference between the
-         sum of ground truths and the sum of estimated counts are
-         flagged
-
-    2. Transcripts with poor correlation between estimated counts
-
-       - spline fitted to relationship between correlation and kmer fraction.
-         cut-off of 0.9 used to define minimum kmer fraction threshold.
-         transcripts below threshold are flagged
-
-    2. is not yet implemented. Currently the minimum kmer fraction is
-    hardcoded as 0.03. Need to implement automatic threshold
-    generation from data
-    '''
-
-    job_memory = "2G"
-
-    TranscriptDiffExpression.identifyLowConfidenceTranscripts(
-        infile, outfile, submit=True)
-
-
-@transform(identifyLowConfidenceTranscript,
-           suffix(".tsv"),
-           ".load")
-def loadLowConfidenceTranscripts(infile, outfile):
-    ''' load the low confidence transcripts '''
-    P.load(infile, outfile)
-
-
-@mkdir("simulation.dir")
-@follows(loadCorrelation,
-         loadLowConfidenceTranscripts)
-def simulation():
-    pass
-
+            # random shuffling requires all the reads to be held in memory!
+            # should really estimate whether 4G will be enough
+            job_memory = "4G"
+        else:
+            job_memory = "1G"
+
+        job_threads = 2
+
+        statement = '''
+        cat %(infile)s |
+        python %(scriptsdir)s/fasta2fastq.py
+        --premrna-fraction=%(simulation_pre_mrna_fraction)s
+        --infile-premrna-fasta=%(premrna_fasta)s
+        --output-read-length=%(simulation_read_length)s
+        --insert-length-mean=%(simulation_insert_mean)s
+        --insert-length-sd=%(simulation_insert_sd)s
+        --counts-method=copies
+        --counts-min=%(simulation_copies_min)s
+        --counts-max=%(simulation_copies_max)s
+        --sequence-error-phred=%(simulation_phred)s
+        --output-counts=%(outfile_counts)s
+        --output-quality-format=33 -L %(outfile)s.log
+        %(options)s | %(single_end_random_cmd)s
+        gzip > %(outfile)s %(paired_end_random_cmd)s'''
+
+        P.run()
+
+    @mkdir("simulation.dir/quant.dir/kallisto")
+    @transform(simulateRNASeqReads,
+               regex("simulation.dir/simulated_reads_(\d+).fastq.1.gz"),
+               add_inputs(buildKallistoIndex),
+               r"simulation.dir/quant.dir/kallisto/simulated_reads_\1/abundance.h5")
+    def quantifyWithKallistoSimulation(infiles, outfile):
+        ''' quantify trancript abundance from simulated reads with kallisto'''
+
+        # TS more elegant way to parse infiles and index?
+        infiles, index = infiles
+        infile, counts = infiles
+
+        # multithreading not supported until > v0.42.1
+        # job_threads = PARAMS["kallisto_threads"]
+        job_threads = 1
+        job_memory = "8G"
+
+        kallisto_options = PARAMS["kallisto_options"]
+
+        if PARAMS["simulation_bootstrap"]:
+            kallisto_bootstrap = PARAMS["kallisto_bootstrap"]
+        else:
+            kallisto_bootstrap = 0
+
+        m = PipelineMapping.Kallisto()
+        statement = m.build((infile,), outfile)
+
+        P.run()
+
+    @transform(quantifyWithKallistoSimulation,
+               suffix(".h5"),
+               ".tsv")
+    def extractKallistoCountSimulation(infile, outfile):
+        ''' run kalliso h5dump to extract txt file'''
+
+        outfile_dir = os.path.dirname(os.path.abspath(infile))
+
+        statement = '''kallisto h5dump -o %(outfile_dir)s %(infile)s'''
+
+        P.run()
+
+    @mkdir("simulation.dir/quant.dir/salmon")
+    @transform(simulateRNASeqReads,
+               regex("simulation.dir/simulated_reads_(\d+).fastq.1.gz"),
+               add_inputs(buildSalmonIndex),
+               r"simulation.dir/quant.dir/salmon/simulated_reads_\1/quant.sf")
+    def quantifyWithSalmonSimulation(infiles, outfile):
+        # TS more elegant way to parse infiles and index?
+        infiles, index = infiles
+        infile, counts = infiles
+
+        # job_threads = PARAMS["salmon_threads"]
+        job_threads = 1
+        job_memory = "8G"
+
+        salmon_options = PARAMS["salmon_options"]
+
+        if PARAMS["salmon_bias_correct"]:
+            salmon_options += " --biascorrect"
+
+        salmon_libtype = "ISF"
+
+        if PARAMS["simulation_bootstrap"]:
+            salmon_bootstrap = PARAMS["salmon_bootstrap"]
+        else:
+            salmon_bootstrap = 0
+
+        m = PipelineMapping.Salmon(PARAMS["salmon_bias_correct"])
+        statement = m.build((infile,), outfile)
+
+        P.run()
+
+    @mkdir("simulation.dir/quant.dir/sailfish")
+    @transform(simulateRNASeqReads,
+               regex("simulation.dir/simulated_reads_(\d+).fastq.1.gz"),
+               add_inputs(buildSailfishIndex),
+               r"simulation.dir/quant.dir/sailfish/simulated_reads_\1/quant.sf")
+    def quantifyWithSailfishSimulation(infiles, outfile):
+        # TS more elegant way to parse infiles and index?
+        infiles, index = infiles
+        infile, counts = infiles
+
+        job_threads = PARAMS["sailfish_threads"]
+        job_memory = "8G"
+
+        sailfish_options = PARAMS["sailfish_options"]
+        sailfish_libtype = "ISF"
+
+        if PARAMS["simulation_bootstrap"]:
+            sailfish_bootstrap = PARAMS["sailfish_bootstrap"]
+        else:
+            sailfish_bootstrap = 0
+
+        m = PipelineMapping.Sailfish()
+        statement = m.build((infile,), outfile)
+
+        P.run()
+
+    @transform(quantifyWithSalmonSimulation,
+               regex("(\S+)/quant.sf"),
+               r"\1/abundance.tsv")
+    def extractSalmonCountSimulation(infile, outfile):
+        ''' rename columns and remove comment to keep file format the same
+        as kallisto'''
+
+        # note: this expects column order to stay the same
+
+        with IOTools.openFile(infile, "r") as inf:
+            lines = inf.readlines()
+
+            with IOTools.openFile(outfile, "w") as outf:
+                outf.write("%s\n" % "\t".join(
+                    ("target_id", "length", "tpm", "est_counts")))
+
+                for line in lines:
+                    if not line.startswith("# "):
+                        outf.write(line)
+
+    @transform(quantifyWithSailfishSimulation,
+               regex("(\S+)/quant.sf"),
+               r"\1/abundance.tsv")
+    def extractSailfishCountSimulation(infile, outfile):
+        ''' rename columns and remove comment to keep file format the same
+        as kallisto'''
+
+        # note: this expects column order to stay the same
+
+        with IOTools.openFile(infile, "r") as inf:
+            lines = inf.readlines()
+
+            with IOTools.openFile(outfile, "w") as outf:
+                outf.write("%s\n" % "\t".join(
+                    ("target_id", "length", "tpm", "est_counts")))
+
+                for line in lines:
+                    if not line.startswith("# "):
+                        outf.write(line)
+
+    # define simulation targets
+    SIMTARGETS = []
+
+    mapToSimulationTargets = {'kallisto': (extractKallistoCountSimulation, ),
+                              'salmon': (extractSalmonCountSimulation, ),
+                              'sailfish': (extractSailfishCountSimulation, )}
+
+    for x in P.asList(PARAMS["quantifiers"]):
+        SIMTARGETS.extend(mapToSimulationTargets[x])
+
+    @follows(*SIMTARGETS)
+    def quantifySimulation():
+        pass
+
+    @transform(SIMTARGETS,
+               regex("simulation.dir/quant.dir/(\S+)/simulated_reads_(\d+)/abundance.tsv"),
+               r"simulation.dir/quant.dir/\1/simulated_reads_\2/results.tsv",
+               r"simulation.dir/simulated_read_counts_\2.tsv")
+    def mergeAbundanceCounts(infile, outfile, counts):
+        ''' merge the abundance and simulation counts files for
+        each simulation '''
+
+        TranscriptDiffExpression.mergeAbundanceCounts(
+            infile, outfile, counts, job_memory="2G", submit=True)
+
+    @collate(mergeAbundanceCounts,
+             regex("simulation.dir/quant.dir/(\S+)/simulated_reads_\d+/results.tsv"),
+             r"simulation.dir/\1_simulation_results.tsv")
+    def concatSimulationResults(infiles, outfile):
+        ''' concatenate all simulation results '''
+
+        df = pd.DataFrame()
+
+        for inf in infiles:
+            df_tmp = pd.read_table(inf, sep="\t")
+            df = pd.concat([df, df_tmp], ignore_index=True)
+
+        df.to_csv(outfile, sep="\t", index=False)
+
+    @transform(concatSimulationResults,
+               suffix("results.tsv"),
+               add_inputs(countKmers),
+               "correlations.tsv")
+    def calculateCorrelations(infiles, outfile):
+        ''' calculate correlation across simulation iterations per transcript'''
+
+        TranscriptDiffExpression.calculateCorrelations(
+            infiles, outfile, PARAMS['simulation_bin_step'],
+            job_memory="8G", submit=True)
+
+    @transform(calculateCorrelations,
+               suffix(".tsv"),
+               ".load")
+    def loadCorrelation(infile, outfile):
+        ''' load the correlations data table'''
+
+        options = "--add-index=id"
+        P.load(infile, outfile, options=options)
+
+    @transform(calculateCorrelations,
+               regex("simulation.dir/(\S+)_simulation_correlations.tsv"),
+               r"simulation.dir/\1_flagged_transcripts.tsv")
+    def identifyLowConfidenceTranscript(infile, outfile):
+        '''
+        identify the transcripts which cannot be confidently quantified
+        these fall into two categories:
+
+        1. Transcripts whose with poor accuracy of estimated counts
+
+           - transcripts with >2 absolute fold difference between the
+             sum of ground truths and the sum of estimated counts are
+             flagged
+
+        2. Transcripts with poor correlation between estimated counts
+
+           - spline fitted to relationship between correlation and kmer fraction.
+             cut-off of 0.9 used to define minimum kmer fraction threshold.
+             transcripts below threshold are flagged
+
+        2. is not yet implemented. Currently the minimum kmer fraction is
+        hardcoded as 0.03. Need to implement automatic threshold
+        generation from data
+        '''
+
+        job_memory = "2G"
+
+        TranscriptDiffExpression.identifyLowConfidenceTranscripts(
+            infile, outfile, submit=True)
+
+    @transform(identifyLowConfidenceTranscript,
+               suffix(".tsv"),
+               ".load")
+    def loadLowConfidenceTranscripts(infile, outfile):
+        ''' load the low confidence transcripts '''
+
+        options = "--add-index=transcript_id"
+        P.load(infile, outfile, options=options)
+
+    @mkdir("simulation.dir")
+    @follows(loadKmers,
+             loadCorrelation,
+             loadLowConfidenceTranscripts)
+    def simulation():
+        pass
+
+else:
+    @follows(mkdir("simulation.dir"))
+    def simulation():
+        pass
 
 ###############################################################################
 # Remove flagged transcripts
@@ -817,12 +1074,14 @@ if "merge_pattern_input" in PARAMS and PARAMS["merge_pattern_input"]:
         PARAMS["merge_pattern_output"].strip())
     SEQUENCEFILES_SALMON_OUTPUT = r"quant.dir/salmon/%s/quant.sf" % (
         PARAMS["merge_pattern_output"].strip())
-
+    SEQUENCEFILES_SAILFISH_OUTPUT = r"quant.dir/sailfish/%s/quant.sf" % (
+        PARAMS["merge_pattern_output"].strip())
 else:
     SEQUENCEFILES_REGEX = regex(
         r".*/(\S+).(fastq.1.gz|fastq.gz|sra)")
     SEQUENCEFILES_KALLISTO_OUTPUT = r"quant.dir/kallisto/\1/abundance.h5"
     SEQUENCEFILES_SALMON_OUTPUT = r"quant.dir/salmon/\1/quant.sf"
+    SEQUENCEFILES_SAILFISH_OUTPUT = r"quant.dir/sailfish/\1/quant.sf"
 
 
 @mkdir("quant.dir/kallisto")
@@ -856,7 +1115,7 @@ def quantifyWithKallisto(infiles, outfile):
          SEQUENCEFILES_REGEX,
          add_inputs(buildSalmonIndex),
          SEQUENCEFILES_SALMON_OUTPUT)
-def quantifyWithSalmon():
+def quantifyWithSalmon(infiles, outfile):
     # TS more elegant way to parse infiles and index?
     infile = [x[0] for x in infiles]
     index = infiles[0][1]
@@ -868,19 +1127,78 @@ def quantifyWithSalmon():
     salmon_options = PARAMS["salmon_options"]
     salmon_libtype = PARAMS["salmon_libtype"]
 
-    # single bootstrap should be fine for our purposes
-    bootstrap = 1
+    bootstrap = PARAMS["salmon_bootstrap"]
 
     m = PipelineMapping.Salmon()
-    statement = m.build((infile,), outfile)
+    statement = m.build(infile, outfile)
 
     P.run()
+
+
+@mkdir("quant.dir/sailfish")
+@collate(SEQUENCEFILES,
+         SEQUENCEFILES_REGEX,
+         add_inputs(buildSailfishIndex),
+         SEQUENCEFILES_SAILFISH_OUTPUT)
+def quantifyWithSailfish(infiles, outfile):
+    # TS more elegant way to parse infiles and index?
+    infile = [x[0] for x in infiles]
+    index = infiles[0][1]
+
+    # job_threads = PARAMS["salmon_threads"]
+    job_threads = 1
+    job_memory = "6G"
+
+    sailfish_options = PARAMS["sailfish_options"]
+    sailfish_libtype = PARAMS["sailfish_libtype"]
+
+    bootstrap = PARAMS["sailfish_bootstrap"]
+
+    m = PipelineMapping.Sailfish()
+    statement = m.build(infile, outfile)
+
+    P.run()
+
+
+@transform(quantifyWithSalmon,
+           regex("quant.dir/(\S+)/(\S+)/quant.sf"),
+           r"quant.dir/\1/\2/abundance.h5")
+def convertFromSalmon(infile, outfile):
+    ''' convert the ssalmon output to Sleuth compatible h5 file'''
+    TranscriptDiffExpression.convertFromFish(infile, outfile)
+
+
+@transform(quantifyWithSailfish,
+           regex("quant.dir/(\S+)/(\S+)/quant.sf"),
+           r"quant.dir/\1/\2/abundance.h5")
+def convertFromSailfish(infile, outfile):
+    ''' convert the sailfish output to Sleuth compatible h5 file'''
+    TranscriptDiffExpression.convertFromFish(infile, outfile)
+
+
+@transform((quantifyWithKallisto),
+           regex("quant.dir/(\S+)/(\S+)/abundance.h5"),
+           r"quant.dir/\1/\2/quant.sf")
+def convertToFish(infile, outfile):
+    ''' convert the kallisto output to a flatfile, as per
+    sailfish/salmon output'''
+
+    outfile_dir = os.path.dirname(outfile)
+
+    statement = '''
+    kallisto h5dump -o %(outfile_dir)s %(infile)s;
+    mv %(outfile_dir)s/abundance.tsv %(outfile)s;
+    rm -rf %(outfile_dir)s/bs_abundance_*.tsv'''
+
+    P.run()
+
 
 # define quantifier targets
 QUANTTARGETS = []
 
-mapToQuantificationTargets = {'kallisto': (quantifyWithKallisto,),
-                              'salmon': (quantifyWithSalmon,)}
+mapToQuantificationTargets = {'kallisto': (quantifyWithKallisto, convertToFish),
+                              'salmon': (quantifyWithSalmon, convertFromSalmon,),
+                              'sailfish': (quantifyWithSailfish, convertFromSailfish,)}
 
 for x in P.asList(PARAMS["quantifiers"]):
     QUANTTARGETS.extend(mapToQuantificationTargets[x])
@@ -890,24 +1208,56 @@ for x in P.asList(PARAMS["quantifiers"]):
 def quantify():
     pass
 
-
 ###############################################################################
 # Differential isoform expression analysis
 ###############################################################################
 
 
-@follows(quantify)
+def estimateSleuthMemory(bootstraps, samples, transcripts):
+    ''' The memory usage of Sleuth is dependent upon the number of
+    samples, transcripts and bootsraps.
+
+    A rough estimate is:
+    24 bytes * bootstraps * samples * transcripts
+    (https://groups.google.com/forum/#!topic/kallisto-sleuth-users/mp064J-DRfI)
+
+    TS: I've found this to be a serious underestimate so we use a
+    more conservative estimate here with a default of 2G
+    '''
+
+    estimate = (48 * PARAMS["kallisto_bootstrap"] * samples * transcripts)
+
+    job_memory = "%fG" % (max(2.0, (estimate / 1073741824.0)))
+
+    return job_memory
+
+
+# note: location of transcripts fasta is hardcoded here!
+def generate_sleuth_parameters_on_the_fly():
+
+    quantifiers = P.asList(PARAMS["quantifiers"])
+    designs = [x.asFile() for x in DESIGNS]
+
+    parameters = []
+
+    for design, quantifier in itertools.product(designs, quantifiers):
+        outfiles = [
+            r"DEresults.dir/%s_%s_sleuth_results.tsv" % (design, quantifier),
+            r"DEresults.dir/%s_%s_sleuth_counts.tsv" % (design, quantifier),
+            r"DEresults.dir/%s_%s_sleuth_tpm.tsv" % (design, quantifier)]
+        parameters.append(
+            ("%s.design.tsv" % design, outfiles, quantifier,
+             "index.dir/transcripts.fa"))
+
+    for job_parameters in parameters:
+        yield job_parameters
+
+
 @mkdir("DEresults.dir")
-@subdivide(["%s.design.tsv" % x.asFile().lower() for x in DESIGNS],
-           regex("(\S+).design.tsv"),
-           add_inputs(buildReferenceTranscriptome),
-           [r"DEresults.dir/\1_results.tsv",
-            r"DEresults.dir/\1_counts.tsv",
-            r"DEresults.dir/\1_tpm.tsv"])
-def runSleuth(infiles, outfiles):
+@files(generate_sleuth_parameters_on_the_fly)
+def runSleuth(design, outfiles, quantifier, transcripts):
     ''' run Sleuth to perform differential testing '''
 
-    design, transcripts = infiles
     outfile, counts, tpm = outfiles
 
     Design = Expression.ExperimentalDesign(design)
@@ -919,81 +1269,288 @@ def runSleuth(infiles, outfiles):
             if line.startswith(">"):
                 number_transcripts += 1
 
-    # TS: rough estimate is 24 bytes * bootstraps * samples * transcripts
-    # (https://groups.google.com/forum/#!topic/kallisto-sleuth-users/mp064J-DRfI)
-    # I've found this to be a serious underestimate so this is a more
-    # conservative estimate
-    memory_estimate = (48 * PARAMS["kallisto_bootstrap"] * number_samples *
-                       number_transcripts)
-    job_memory = "%fG" % ((memory_estimate / 1073741824))
+    job_memory = estimateSleuthMemory(
+        PARAMS["%(quantifier)s_bootstrap" % locals()],
+        number_samples, number_transcripts)
 
     design_id = P.snip(design, ".design.tsv")
+
     model = PARAMS["sleuth_model_%s" % design_id]
+    contrasts = PARAMS["sleuth_contrasts_%s" % design_id]
 
-    contrasts = PARAMS["sleuth_contrasts_%s" % design_id].split(",")
+    outfile_pattern = P.snip(outfile, ".tsv")
 
-    for contrast in contrasts:
+    if PARAMS["sleuth_ihw"]:
+        ihw = "--use-ihw"
+    else:
+        ihw = ""
 
-        TranscriptDiffExpression.runSleuth(
-            design, "quant.dir", model, contrast,
-            outfile, counts, tpm, PARAMS["sleuth_fdr"],
-            submit=True, job_memory=job_memory)
+    statement = '''
+    python %(scriptsdir)s/counts2table.py
+    --design-tsv-file=%(design)s
+    --output-filename-pattern=%(outfile_pattern)s
+    --log=%(outfile_pattern)s.log
+    --method=sleuth
+    --fdr=%(sleuth_fdr)s
+    --model=%(model)s
+    --contrasts=%(contrasts)s
+    --sleuth-counts-dir=quant.dir/%(quantifier)s
+    --outfile-sleuth-count=%(counts)s
+    --outfile-sleuth-tpm=%(tpm)s
+    %(ihw)s
+    >%(outfile)s
+    '''
+
+    P.run()
+
+
+# # define sleuth targets
+# SLEUTHTARGETS = []
+
+# mapToSleuthTargets = {'kallisto': (runSleuthKallisto,),
+#                       'salmon': (runSleuthSalmon,),
+#                       'sailfish': (runSleuthSailfish,)}
+
+# for x in P.asList(PARAMS["quantifiers"]):
+#     SLEUTHTARGETS.extend(mapToSleuthTargets[x])
+
+
+# @follows(*SLEUTHTARGETS)
+# def runSleuth():
+#     pass
+
+
+@follows(*QUANTTARGETS)
+@mkdir("DEresults.dir")
+@collate(QUANTTARGETS,
+         regex("quant.dir/(\S+)/(\S+)/quant.sf"),
+         [r"DEresults.dir/all_counts_\1.tsv",
+          r"DEresults.dir/all_tpm_\1.tsv"])
+def mergeCounts(infiles, outfiles):
+    ''' run Sleuth on all samples to generate a full counts/tpm table'''
+
+    counts, tpm = outfiles
+
+    df_counts = pd.DataFrame()
+    df_tpm = pd.DataFrame()
+
+    def addSampleColumn(df, infile, index, column, sample,
+                        index_name=None):
+        ''' add a single column called <sample> from the infile'''
+
+        tmp_df = pd.read_table(
+            infile, sep="\t", usecols=[index, column],
+            index_col=index,  comment="#")
+
+        tmp_df.columns = [sample]
+
+        if index_name:
+            tmp_df.index.name = index_name
+
+        df = pd.merge(df, tmp_df, left_index=True, right_index=True,
+                      how="outer")
+        return df
+
+    for infile in infiles:
+        sample = os.path.basename(os.path.dirname(infile))
+
+        if "kallisto" in infile:
+            df_counts = addSampleColumn(
+                df_counts, infile, "target_id", "est_counts", sample,
+                index_name="transcript_id")
+            df_tpm = addSampleColumn(
+                df_tpm, infile, "target_id", "tpm", sample,
+                index_name="transcript_id")
+
+        elif "salmon" in infile or "sailfish" in infile:
+            df_counts = addSampleColumn(
+                df_counts, infile, "Name", "NumReads", sample,
+                index_name="transcript_id")
+            df_tpm = addSampleColumn(
+                df_tpm, infile, "Name", "TPM", sample,
+                index_name="transcript_id")
+
+    df_counts.to_csv(counts, sep="\t", index=True)
+    df_tpm.to_csv(tpm, sep="\t", index=True)
+
+
+@transform(mergeCounts,
+           regex("DEresults.dir/all_(\S+)_(\S+).tsv"),
+           r"DEresults.dir/all_gene_expression_\1_\2.tsv")
+def aggregateCounts(infiles, outfile):
+    ''' aggregate counts across transcripts for the same gene_id '''
+
+    for infile in infiles:
+        outfile = infile.split("_")
+        outfile[1] = "gene_expression_" + outfile[1]
+        outfile = "_".join(outfile)
+
+        statement = '''SELECT DISTINCT transcript_id, gene_id FROM
+                       annotations.transcript_info'''
+        transcript_info_df = pd.read_sql(statement, connect())
+        transcript_info_df.set_index("transcript_id", inplace=True)
+
+        df = pd.read_table(infile, sep="\t")
+        df.set_index("transcript_id", inplace=True)
+        df = df.join(transcript_info_df)
+        df = pd.DataFrame(df.groupby("gene_id").apply(sum))
+        df.drop("gene_id", 1, inplace=True)
+
+        df.to_csv(outfile, sep="\t", index=True)
+
+
+@product(aggregateCounts,
+         formatter("DEresults.dir/all_gene_expression_counts_(?P<QUANTIFIER>\S+).tsv"),
+         ["%s.design.tsv" % x.asFile() for x in DESIGNS],
+         formatter(".*/(?P<DESIGN>\S+).design.tsv$"),
+         "DEresults.dir/{DESIGN[1][0]}_{QUANTIFIER[0][0]}_deseq2_DE_results.tsv")
+def diffExpressionDESeq2(infiles, outfile):
+    counts_inf, design_inf = infiles
+
+    outfile_pattern = P.snip(outfile, ".tsv")
+
+    design_id = P.snip(design_inf, ".design.tsv")
+    model = PARAMS["deseq2_model_%s" % design_id]
+    contrasts = PARAMS["deseq2_contrasts_%s" % design_id]
+
+    outfile_pattern = P.snip(outfile, ".tsv")
+
+    # counts need to be rounded to ints first
+    tmp_counts = P.getTempFilename(shared=True)
+    df = pd.read_table(counts_inf, sep="\t", index_col=0)
+    df = df.applymap(lambda x: round(x, 0))
+    df.to_csv(tmp_counts, sep="\t", index=True)
+
+    ref_group = PARAMS["deseq2_ref_group_%s" % design_id]
+    if ref_group:
+        ref_group_cmd = "--reference-group=%s" % ref_group
+    else:
+        ref_group_cmd = ""
+
+    if PARAMS["deseq2_ihw"]:
+        ihw = "--use-ihw"
+    else:
+        ihw = ""
+
+    statement = '''
+    python %(scriptsdir)s/counts2table.py
+    --tags-tsv-file=%(tmp_counts)s
+    --design-tsv-file=%(design_inf)s
+    --output-filename-pattern=%(outfile_pattern)s
+    --log=%(outfile_pattern)s.log
+    --method=deseq2
+    --fdr=%(deseq2_fdr)s
+    --model=%(model)s
+    --contrasts=%(contrasts)s
+    %(ihw)s
+    %(ref_group_cmd)s
+    >%(outfile)s
+    '''
+
+    P.run()
+    os.unlink(tmp_counts)
+
+
+@transform(diffExpressionDESeq2,
+           suffix(".tsv"),
+           ".load")
+def loaddiffExpressionDESeq2(infile, outfile):
+    TranscriptDiffExpression.loadSleuthTableGenes(
+        infile, outfile,
+        PARAMS["annotations_interface_table_gene_info"],
+        PARAMS["geneset_gene_biotypes"],
+        PARAMS["database"],
+        PARAMS["annotations_database"])
+
+
+@transform(aggregateCounts,
+           suffix(".tsv"),
+           ".load")
+def loadGeneWiseAggregates(infile, outfile):
+    ''' load tables from aggregation of transcript-level estimate to
+    gene-level estimates'''
+
+    P.load(infile, outfile, options="add-index=gene_id")
+    P.load(infile.replace("counts", "tpm"), outfile.replace("counts", "tpm"),
+           options="add-index=gene_id")
+
+
+@transform(mergeCounts,
+           suffix(".tsv"),
+           ".load")
+def loadMergedCounts(infiles, outfile):
+    ''' load tables from Sleuth collation of all estimates '''
+
+    for infile in infiles:
+        outfile = infile.replace(".tsv", ".load")
+
+        TranscriptDiffExpression.loadSleuthTable(
+            infile, outfile,
+            PARAMS["annotations_interface_table_transcript_info"],
+            PARAMS["geneset_gene_biotypes"],
+            PARAMS["database"],
+            PARAMS["annotations_database"])
 
 
 @transform(runSleuth,
-           regex("(\S+)_(counts|tpm).tsv"),
-           r"\1_\2.load")
+           regex("(\S+)_(\S+)_(counts|tpm).tsv"),
+           r"\1_\2_\3.load")
 def loadSleuthTables(infile, outfile):
     ''' load tables from Sleuth '''
-    P.load(infile, outfile)
+
+    TranscriptDiffExpression.loadSleuthTable(
+        infile, outfile,
+        PARAMS["annotations_interface_table_transcript_info"],
+        PARAMS["geneset_gene_biotypes"],
+        PARAMS["database"],
+        PARAMS["annotations_database"])
 
 
 @transform(runSleuth,
            suffix("_results.tsv"),
-           "_withBiotypes.tsv")
-def addTranscriptBiotypes(infile, outfile):
-    ''' add the transcript biotypes to the results outfile'''
-    # TS: This could be done when the report is built but saves time just
-    # to just do it once here
-
-    df = pd.read_table(infile, sep="\t", index_col=0)
-    df.set_index('test_id', inplace=True)
-    df.index.names = ["transcript_id"]
-
-    dbh = connect()
+           "_DEresults.load")
+def loadSleuthResults(infiles, outfile):
+    ''' load Sleuth results '''
+    # List of three Sleuth outputs received as infiles due to generator
+    # First file is results list
+    infile = infiles[0]
+    tmpfile = P.getTempFilename("/ifs/scratch")
 
     table = os.path.basename(
         PARAMS["annotations_interface_table_transcript_info"])
 
-    where_cmd = " OR ".join(["WHERE gene_biotype = '%s'" % x
-                             for x in PARAMS["geneset_biotypes"].split(",")])
+    if PARAMS["geneset_gene_biotypes"]:
+        where_cmd = "WHERE " + " OR ".join(
+            ["gene_biotype = '%s'" % x
+             for x in PARAMS["geneset_gene_biotypes"].split(",")])
+    else:
+        where_cmd = ""
 
-    select = dbh.execute("""
-    SELECT DISTINCT
+    select = """SELECT DISTINCT
     transcript_id, transcript_biotype, gene_id, gene_name
     FROM annotations.%(table)s
-    %(where_cmd)s""" % locals())
+    %(where_cmd)s""" % locals()
 
-    df_annotations = pd.DataFrame.from_records(
-        select, index="transcript_id",
-        columns=("transcript_id", "transcript_biotype",
-                 "gene_id", "gene_name"))
+    df1 = pd.read_table(infile, sep="\t")
+    df1.set_index("test_id", drop=False, inplace=True)
 
-    df = df.join(df_annotations, sort=False)
+    df2 = pd.read_sql(select, connect())
+    df2.set_index("transcript_id", drop=False, inplace=True)
 
-    df.to_csv(outfile, index=True, sep="\t")
+    df = df1.join(df2)
+    df.to_csv(tmpfile, sep="\t", index=True)
 
-
-@transform(addTranscriptBiotypes,
-           suffix("_withBiotypes.tsv"),
-           "_DEresults.load")
-def loadSleuthResults(infile, outfile):
-    ''' load Sleuth results '''
-    P.load(infile, outfile)
+    options = "--add-index=transcript_id"
+    P.load(tmpfile, outfile, options=options)
+    os.unlink(tmpfile)
 
 
-@follows(loadSleuthTables,
-         loadSleuthResults)
+@follows(runSleuth,
+         loadSleuthTables,
+         loadSleuthResults,
+         loadMergedCounts,
+         loadGeneWiseAggregates,
+         loaddiffExpressionDESeq2)
 def differentialExpression():
     pass
 
@@ -1003,19 +1560,20 @@ def differentialExpression():
 ###############################################################################
 
 @mkdir("summary_plots")
-@transform(runSleuth,
-           regex("DEresults.dir/(\S+)_tpm.tsv"),
-           add_inputs(r"\1.design.tsv"),
-           r"summary_plots/\1_plots.log")
+@collate(runSleuth,
+         regex("DEresults.dir/(\S+)_(\S+)_sleuth_results.tsv"),
+         add_inputs(r"\1.design.tsv"),
+         r"summary_plots/\1_\2_plots.log")
 def expressionSummaryPlots(infiles, logfile):
     ''' make summary plots for expression values for each design file'''
 
-    counts_inf, design_inf = infiles
+    infiles, design_inf = infiles[0]
+    results_inf, counts_inf, tpm_inf = infiles
 
     job_memory = "4G"
 
     TranscriptDiffExpression.makeExpressionSummaryPlots(
-        counts_inf, design_inf, logfile, submit=True, job_memory=job_memory)
+        tpm_inf, design_inf, logfile, submit=True, job_memory=job_memory)
 
 
 ###############################################################################
@@ -1023,10 +1581,10 @@ def expressionSummaryPlots(infiles, logfile):
 ###############################################################################
 
 
-@follows(quantify,
-         differentialExpression,
+@follows(differentialExpression,
          expressionSummaryPlots,
-         simulation)
+         simulation,
+         loadDesigns)
 def full():
     pass
 

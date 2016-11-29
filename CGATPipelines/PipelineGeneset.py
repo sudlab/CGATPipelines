@@ -1380,7 +1380,7 @@ def buildGenomicContext(infiles, outfile, distance=10):
        Merge adajcent features of the same type within this distance.
 
     '''
-
+    job_memory = "4G"
     repeats_gff, rna_gff, annotations_gtf, geneset_flat_gff, \
         cpgisland_bed, go_tsv = infiles
 

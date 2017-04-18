@@ -887,10 +887,10 @@ def main(args=sys.argv):
                     # GIL
                     #
                     # Note that threading might cause problems with rpy.
-                    task.Pool = ThreadPool
+                    #task.Pool = ThreadPool
 
                     # create the session proxy
-                    startSession()
+                    #startSession()
 
                 #
                 #   make sure we are not logging at the same time in

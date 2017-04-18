@@ -398,10 +398,13 @@ def run(**kwargs):
     # * an SGE session is present
     run_on_cluster = ("to_cluster" not in options or
                       options.get("to_cluster")) and \
-        not options["without_cluster"] and \
-        GLOBAL_SESSION is not None
-
-    # SGE compatible job_name
+        not options["without_cluster"]
+    
+    if run_on_cluster:
+        session = drmaa.Session()
+        session.initialize()
+    
+        # SGE compatible job_name
     job_name = re.sub(
         "[:]", "_",
         os.path.basename(options.get("outfile", "ruffus")))

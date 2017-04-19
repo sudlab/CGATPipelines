@@ -489,6 +489,7 @@ def run(**kwargs):
                                              ignore_errors=ignore_errors)
 
             session.deleteJobTemplate(jt)
+            session.exit()
 
         # run single job on cluster - this can be an array job
         else:
@@ -532,6 +533,7 @@ def run(**kwargs):
                                              ignore_errors=ignore_errors)
 
             session.deleteJobTemplate(jt)
+            session.exit()
     else:
         # run job locally on cluster
         statement_list = []

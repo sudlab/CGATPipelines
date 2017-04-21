@@ -275,7 +275,7 @@ if PARAMS.get("preprocessors", None):
                     PARAMS["trimmomatic_c_thresh"]) + trimmomatic_options
 
         job_threads = PARAMS["threads"]
-        job_memory = "7G"
+        job_memory = PARAMS["memory"]
 
         track = re.match(REGEX_TRACK, infile).groups()[0]
 

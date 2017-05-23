@@ -791,6 +791,9 @@ def main(args=sys.argv):
         PARAMS["cluster_parallel_environment"] =\
             options.cluster_parallel_environment
 
+    if options.without_cluster is not None:
+        PARAMS["without_cluster"] = options.without_cluster
+
     PARAMS["ruffus_checksums_level"] = options.ruffus_checksums_level
 
     for variables in options.variables_to_set:

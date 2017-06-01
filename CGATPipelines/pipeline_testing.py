@@ -27,7 +27,7 @@ information how to use CGAT pipelines.
 
 In order to run all tests, simply enter an empty directory and type::
 
-   python <srcdir>/pipeline_testing.py make config
+   python <srcdir>/pipeline_testing.py config
 
 Edit the config files as required and then type::
 
@@ -73,7 +73,7 @@ with a ``#``).
 Some files will be different at every run, for example if they use
 some form of random initialization. Thus, the exact test can be
 relaxed for groups of files. Files matching the regular expression in
-``regex_linecount` will test if a file exists and the number of lines
+``regex_linecount`` will test if a file exists and the number of lines
 are identitical.  Files matching the regular expressions in
 ``regex_exist`` will thus only be tested if they exist or not.
 
@@ -140,7 +140,7 @@ Some pipelines depend on the output of other pipelines, most notable
 is :doc:`pipeline_annotations`. To run a set of pipelines before other
 pipelines name them in the option ``prerequisites``, for example::
 
-   prerequisites=test_annnotations
+   prerequisites=prereq_annnotations
 
 Pipeline output
 ===============
@@ -299,6 +299,27 @@ def runTests(infile, outfile):
 
 @transform(runTests,
            suffix(".log"),
+           ".report")
+def runReports(infile, outfile):
+    '''run a pipeline report.'''
+
+    track = P.snip(outfile, ".report")
+
+    pipeline_name = PARAMS.get(
+        "%s_pipeline" % track,
+        "pipeline_" + track[len("test_"):])
+
+    statement = '''
+    (cd %(track)s.dir; python %(pipelinedir)s/%(pipeline_name)s.py
+    %(pipeline_options)s make build_report) >& %(outfile)s
+    '''
+
+    P.run(ignore_errors=True)
+
+
+@follows(runReports)
+@transform(runTests,
+           suffix(".log"),
            ".md5")
 def buildCheckSums(infile, outfile):
     '''build checksums for files in the build directory.
@@ -310,26 +331,26 @@ def buildCheckSums(infile, outfile):
     track = P.snip(infile, ".log")
 
     suffixes = P.asList(PARAMS.get(
-        '%s_suffixes' % track,
-        PARAMS["suffixes"]))
+        '%s_suffixes' % track, ""))
 
     if len(suffixes) == 0:
-        raise ValueError('no file types defined for test')
-
-    regex_pattern = ".*\(%s\)" % "\|".join(suffixes)
-    regex_pattern = pipes.quote(regex_pattern)
-
-    # ignore log files as time stamps will
-    # be different
-    statement = '''find %(track)s.dir
-    -type f
-    -not -regex ".*.log"
-    -regex %(regex_pattern)s
-    -exec %(pipeline_scriptsdir)s/cgat_file_apply.sh {} md5sum \;
-    | perl -p -e "s/ +/\\t/g"
-    | sort -k1,1
-    > %(outfile)s'''
-    P.run()
+        E.info(" No checksums computed for %s" % track)
+        IOTools.touchFile("%s.md5" % track)
+    else:
+        regex_pattern = ".*\(%s\)" % "\|".join(suffixes)
+        regex_pattern = pipes.quote(regex_pattern)
+        E.debug(" Computing checksum for files "
+                "ending in %s" % ", ".join(suffixes))
+        statement = '''find %(track)s.dir
+        -type f
+        -not -regex '.*\/report.*'
+        -not -regex '.*\/_.*'
+        -regex %(regex_pattern)s
+        -exec %(pipeline_scriptsdir)s/cgat_file_apply.sh {} md5sum \;
+        | perl -p -e "s/ +/\\t/g"
+        | sort -k1,1
+        > %(outfile)s'''
+        P.run()
 
 
 @transform(runTests,
@@ -344,29 +365,60 @@ def buildLineCounts(infile, outfile):
     track = P.snip(infile, ".log")
 
     suffixes = P.asList(PARAMS.get(
-        '%s_suffixes' % track,
-        PARAMS["suffixes"]))
+        '%s_regex_linecount' % track, ""))
 
     if len(suffixes) == 0:
-        raise ValueError('no file types defined for test')
+        E.info(" No lines computed for %s" % track)
+        IOTools.touchFile("%s.lines" % track)
+    else:
+        regex_pattern = ".*\(%s\)" % "\|".join(suffixes)
+        regex_pattern = pipes.quote(regex_pattern)
+        E.debug(" Computing lines for files "
+                "ending in %s" % ", ".join(suffixes))
+        statement = '''find %(track)s.dir
+        -type f
+        -not -regex '.*\/report.*'
+        -not -regex '.*\/_.*'
+        -regex %(regex_pattern)s
+        -exec %(pipeline_scriptsdir)s/cgat_file_apply.sh {} wc -l \;
+        | sort -k1,1
+        > %(outfile)s'''
+        P.run()
 
-    regex_pattern = ".*\(%s\)" % "\|".join(suffixes)
 
-    regex_pattern = pipes.quote(regex_pattern)
+@transform(runTests,
+           suffix(".log"),
+           ".exist")
+def checkFileExistence(infile, outfile):
+    '''check whether file exists.
 
-    # ignore log files as time stamps will
-    # be different
-    statement = '''find %(track)s.dir
-    -type f
-    -not -regex ".*.log"
-    -regex %(regex_pattern)s
-    -exec %(pipeline_scriptsdir)s/cgat_file_apply.sh {} wc -l \;
-    | sort -k1,1
-    > %(outfile)s'''
-    P.run()
+    Files are uncompressed before checking existence.
+    '''
+
+    track = P.snip(infile, ".log")
+
+    suffixes = P.asList(PARAMS.get(
+        '%s_regex_exist' % track, ""))
+
+    if len(suffixes) == 0:
+        E.info(" No existence checked for %s" % track)
+        IOTools.touchFile("%s.exist" % track)
+    else:
+        regex_pattern = ".*\(%s\)" % "\|".join(suffixes)
+        regex_pattern = pipes.quote(regex_pattern)
+        E.debug(" Checking existence of files "
+                "ending in %s" % ", ".join(suffixes))
+        statement = '''find %(track)s.dir
+        -type f
+        -not -regex '.*\/report.*'
+        -not -regex '.*\/_.*'
+        -regex %(regex_pattern)s
+        | sort -k1,1
+        > %(outfile)s'''
+        P.run()
 
 
-@collate((buildCheckSums, buildLineCounts),
+@collate((buildCheckSums, buildLineCounts, checkFileExistence),
          regex("([^.]*).(.*)"),
          r"\1.stats")
 def mergeFileStatistics(infiles, outfile):
@@ -374,8 +426,9 @@ def mergeFileStatistics(infiles, outfile):
     infiles = " ".join(sorted(infiles))
 
     statement = '''
-    echo -e "file\\tnlines\\tmd5\\txxx" > %(outfile)s;
-    join -t $'\\t' %(infiles)s >> %(outfile)s'''
+    %(pipeline_scriptsdir)s/merge_testing_output.sh
+    %(infiles)s
+    > %(outfile)s'''
     P.run()
 
 
@@ -497,27 +550,12 @@ def loadReference(infile, outfile):
     P.load(infile, outfile, options="--add-index=file")
 
 
-@transform(runTests,
-           suffix(".log"),
-           ".report")
-def runReports(infile, outfile):
-    '''run a pipeline report.'''
-
-    track = P.snip(outfile, ".report")
-
-    pipeline_name = PARAMS.get(
-        "%s_pipeline" % track,
-        "pipeline_" + track[len("test_"):])
-
-    statement = '''
-    (cd %(track)s.dir; python %(pipelinedir)s/%(pipeline_name)s.py
-    %(pipeline_options)s make build_report) >& %(outfile)s
-    '''
-
-    P.run(ignore_errors=True)
+@follows(runTests, runReports)
+def run_components():
+    pass
 
 
-@follows(runTests, runReports, loadComparison, loadResults, loadReference)
+@follows(run_components, loadComparison, loadResults, loadReference)
 def full():
     pass
 
@@ -528,6 +566,7 @@ def reset(infile, outfile):
     to_cluster = False
 
     statement = '''
+    rm -rf prereq_* ctmp*;
     rm -rf test_* _cache _static _templates _tmp report;
     rm -f *.log csvdb *.load *.tsv'''
     P.run()

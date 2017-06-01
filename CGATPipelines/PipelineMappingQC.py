@@ -13,6 +13,7 @@ import re
 import CGAT.IOTools as IOTools
 import CGAT.BamTools as BamTools
 import CGATPipelines.Pipeline as P
+import pandas as pd
 
 PICARD_MEMORY = "5G"
 
@@ -88,7 +89,7 @@ def buildPicardAlignmentStats(infile, outfile, genome_file):
     # or there is no sequence/quality information within the bam file.
     # Thus, add it explicitly.
     statement = '''cat %(infile)s
-    | python %(scriptsdir)s/bam2bam.py -v 0
+    | cgat bam2bam -v 0
     --method=set-sequence --output-sam
     | CollectMultipleMetrics
     INPUT=/dev/stdin
@@ -384,7 +385,7 @@ def loadPicardHistogram(infiles, outfile, suffix, column,
         return
 
     header = ",".join([P.snip(os.path.basename(x), pipeline_suffix)
-                      for x in xfiles])
+                       for x in xfiles])
     filenames = " ".join(["%s.%s" % (x, suffix) for x in xfiles])
 
     # there might be a variable number of columns in the tables
@@ -397,7 +398,7 @@ def loadPicardHistogram(infiles, outfile, suffix, column,
         " --allow-empty-file"
         " --replace-header" % (column, header))
 
-    statement = """python %(scriptsdir)s/combine_tables.py
+    statement = """cgat combine_tables
     --regex-start="## HISTOGRAM"
     --missing-value=0
     --take=2
@@ -561,7 +562,7 @@ def buildBAMStats(infile, outfile):
 
     '''
 
-    statement = '''python %(scriptsdir)s/bam2stats.py
+    statement = '''cgat bam2stats
     --force-output
     --output-filename-pattern=%(outfile)s.%%s
     < %(infile)s
@@ -581,7 +582,7 @@ def loadBAMStats(infiles, outfile):
     '''
 
     header = ",".join([P.snip(os.path.basename(x), ".readstats")
-                      for x in infiles])
+                       for x in infiles])
     filenames = " ".join(["<( cut -f 1,2 < %s)" % x for x in infiles])
     tablename = P.toTable(outfile)
 
@@ -591,13 +592,13 @@ def loadBAMStats(infiles, outfile):
         " --allow-empty-file")
 
     E.info("loading bam stats - summary")
-    statement = """python %(scriptsdir)s/combine_tables.py
+    statement = """cgat combine_tables
     --header-names=%(header)s
     --missing-value=0
     --ignore-empty
     %(filenames)s
     | perl -p -e "s/bin/track/"
-    | python %(scriptsdir)s/table2table.py --transpose
+    | cgat table2table --transpose
     | %(load_statement)s
     > %(outfile)s"""
     P.run()
@@ -610,7 +611,7 @@ def loadBAMStats(infiles, outfile):
             "%s_%s" % (tablename, suffix),
             options="--allow-empty-file")
 
-        statement = """python %(scriptsdir)s/combine_tables.py
+        statement = """cgat combine_tables
         --header-names=%(header)s
         --skip-titles
         --missing-value=0
@@ -632,7 +633,7 @@ def loadBAMStats(infiles, outfile):
             "%s_%s" % (tablename, suffix),
             options=" --allow-empty-file")
 
-        statement = """python %(scriptsdir)s/combine_tables.py
+        statement = """cgat combine_tables
         --header-names=%(header)s
         --skip-titles
         --missing-value=0
@@ -648,7 +649,7 @@ def loadBAMStats(infiles, outfile):
 def buildPicardRnaSeqMetrics(infiles, strand, outfile):
     '''run picard:RNASeqMetrics
 
-    
+
 
     Arguments
     ---------
@@ -731,3 +732,64 @@ def loadPicardRnaSeqMetrics(infiles, outfiles):
     else:
         with open(outfile_histogram, "w") as ofh:
             ofh.write("No histograms detected, no data loaded.")
+
+
+def loadIdxstats(infiles, outfile):
+    '''take list of file paths to samtools idxstats output files
+    and merge to create single dataframe containing mapped reads per
+    contig for each track. This dataframe is then loaded into
+    database.
+
+    Loads tables into the database
+        * idxstats_reads_per_chromosome
+
+    Arguments
+    ---------
+    infiles : list
+        list where each element is a string of the filename containing samtools
+        idxstats output. Filename format is expected to be 'sample.idxstats'
+    outfile : string
+        Logfile. The table name will be derived from `outfile`.
+    '''
+
+    outf = P.getTempFile(".")
+    dfs = []
+    for f in infiles:
+        track = P.snip(f, ".idxstats").split('/')[-1]
+
+        if not os.path.exists(f):
+            E.warn("File %s missing" % f)
+            continue
+
+        # reformat idx stats
+        df = pd.read_csv(f, sep='\t', header=None)
+        df.columns = ['region', 'length', 'mapped', 'unmapped']
+
+        # calc total reads mapped & unmappedpep
+        total_reads = df.unmapped.sum() + df.mapped.sum()
+        total_mapped_reads = df.mapped.sum()
+
+        reformatted_df = pd.DataFrame([['total_mapped_reads', total_mapped_reads],
+                                      ['total_reads', total_reads],
+                                      ['track', track]], columns=(['region', 'mapped']))
+
+        # reformat the df
+        df = df.append(reformatted_df, ignore_index=True)
+        df.set_index('region', inplace=True)
+        df1 = df[['mapped']].T
+        # set track as index
+        df1.set_index('track', inplace=True)
+        dfs.append(df1)
+
+    # merge dataframes into single table
+    master_df = pd.concat(dfs)
+    master_df.drop('*', axis=1, inplace=True)
+    # transform dataframe to avoid reaching column limit
+    master_df = master_df.T
+    master_df.to_csv(outf, sep='\t', index=True)
+    outf.close()
+
+    P.load(outf.name,
+           outfile,
+           options="--ignore-empty --add-index=track")
+    os.unlink(outf.name)

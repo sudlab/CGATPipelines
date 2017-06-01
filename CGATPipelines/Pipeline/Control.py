@@ -48,11 +48,12 @@ import subprocess
 import sys
 import tempfile
 import time
-from cStringIO import StringIO
-from multiprocessing.pool import ThreadPool
+try:
+    from StringIO import StringIO
+except ImportError:
+    from io import StringIO
 
-# talking to mercurial
-import hgapi
+from multiprocessing.pool import ThreadPool
 
 # talking to RabbitMQ
 try:
@@ -80,7 +81,7 @@ from CGATPipelines.Pipeline.Utils import isTest, getCaller, getCallerLocals
 from CGATPipelines.Pipeline.Execution import execute, startSession,\
     closeSession
 from CGATPipelines.Pipeline.Local import getProjectName, getPipelineName
-
+from CGATPipelines.Pipeline.Parameters import inputValidation
 # Set from Pipeline.py
 PARAMS = {}
 
@@ -112,6 +113,28 @@ def writeConfigFiles(pipeline_path, general_path):
             raise ValueError(
                 "default config file for `%s` not found in %s" %
                 (config_files, paths))
+
+
+def printConfigFiles():
+    '''
+        Print the list of .ini files used to configure the pipeline
+        along with their associated priorities.
+        Priority 1 is the highest.
+    '''
+
+    filenames = PARAMS['pipeline_ini']
+    print ("\n List of .ini files used to configure the pipeline")
+    s = len(filenames)
+    if s == 0:
+        print (" No ini files passed!")
+    elif s >= 1:
+        print (" %-11s: %s " % ("Priority", "File"))
+        for f in filenames:
+            if s == 1:
+                print (" (highest) %s: %s\n" % (s, f))
+            else:
+                print (" %-11s: %s " % (s, f))
+            s -= 1
 
 
 def clonePipeline(srcdir, destdir=None):
@@ -360,18 +383,18 @@ def peekParameters(workingdir,
 
     # update interface
     if update_interface:
-        for key, value in dump.items():
+        for key, value in list(dump.items()):
             if key.startswith("interface"):
                 dump[key] = os.path.join(workingdir, value)
 
     # keep only interface if so required
     if restrict_interface:
-        dump = dict([(k, v) for k, v in dump.iteritems()
+        dump = dict([(k, v) for k, v in dump.items()
                      if k.startswith("interface")])
 
     # prefix all parameters
     if prefix is not None:
-        dump = dict([("%s%s" % (prefix, x), y) for x, y in dump.items()])
+        dump = dict([("%s%s" % (prefix, x), y) for x, y in list(dump.items())])
 
     return dump
 
@@ -629,6 +652,10 @@ config
 dump
    write pipeline configuration to stdout
 
+printconfig
+   write pipeline configuration to stdout in a user-friendly way so
+   it is easier to debug pipeline parameters
+
 touch
    touch files only, do not run
 
@@ -684,7 +711,7 @@ def main(args=sys.argv):
                       type="choice",
                       choices=(
                           "make", "show", "plot", "dump", "config", "clone",
-                          "check", "regenerate"),
+                          "check", "regenerate", "printconfig"),
                       help="action to take [default=%default].")
 
     parser.add_option("--pipeline-format", dest="pipeline_format",
@@ -728,7 +755,7 @@ def main(args=sys.argv):
 
     parser.add_option("-s", "--set", dest="variables_to_set",
                       type="string", action="append",
-                      help="explicitely set paramater values "
+                      help="explicitly set paramater values "
                       "[default=%default].")
 
     parser.add_option("-c", "--checksums", dest="ruffus_checksums_level",
@@ -751,6 +778,11 @@ def main(args=sys.argv):
                       help="RabbitMQ host to send log messages to "
                       "[default=%default].")
 
+    parser.add_option("--input-validation", dest="input_validation",
+                      action="store_true",
+                      help="perform input validation before starting "
+                      "[default=%default].")
+
     parser.set_defaults(
         pipeline_action=None,
         pipeline_format="svg",
@@ -766,7 +798,8 @@ def main(args=sys.argv):
         is_test=False,
         ruffus_checksums_level=0,
         rabbitmq_host="saruman",
-        rabbitmq_exchange="ruffus_pipelines")
+        rabbitmq_exchange="ruffus_pipelines",
+        input_validation=False)
 
     (options, args) = E.Start(parser,
                               add_cluster_options=True)
@@ -779,17 +812,34 @@ def main(args=sys.argv):
     # configuration files.
 
     PARAMS["dryrun"] = options.dry_run
-    if options.cluster_queue is not None:
-        PARAMS["cluster_queue"] = options.cluster_queue
-    if options.cluster_priority is not None:
-        PARAMS["cluster_priority"] = options.cluster_priority
+    PARAMS["input_validation"] = options.input_validation
+
+    # use cli_cluster_* keys in PARAMS to ensure highest priority
+    # of cluster_* options passed with the command-line
+    if options.cluster_memory_default is not None:
+        PARAMS["cli_cluster_memory_default"] = options.cluster_memory_default
+        PARAMS["cluster_memory_default"] = options.cluster_memory_default
+    if options.cluster_memory_resource is not None:
+        PARAMS["cli_cluster_memory_resource"] = options.cluster_memory_resource
+        PARAMS["cluster_memory_resource"] = options.cluster_memory_resource
     if options.cluster_num_jobs is not None:
+        PARAMS["cli_cluster_num_jobs"] = options.cluster_num_jobs
         PARAMS["cluster_num_jobs"] = options.cluster_num_jobs
     if options.cluster_options is not None:
+        PARAMS["cli_cluster_options"] = options.cluster_options
         PARAMS["cluster_options"] = options.cluster_options
     if options.cluster_parallel_environment is not None:
-        PARAMS["cluster_parallel_environment"] =\
-            options.cluster_parallel_environment
+        PARAMS["cli_cluster_parallel_environment"] = options.cluster_parallel_environment
+        PARAMS["cluster_parallel_environment"] = options.cluster_parallel_environment
+    if options.cluster_priority is not None:
+        PARAMS["cli_cluster_priority"] = options.cluster_priority
+        PARAMS["cluster_priority"] = options.cluster_priority
+    if options.cluster_queue is not None:
+        PARAMS["cli_cluster_queue"] = options.cluster_queue
+        PARAMS["cluster_queue"] = options.cluster_queue
+    if options.cluster_queue_manager is not None:
+        PARAMS["cli_cluster_queue_manager"] = options.cluster_queue_manager
+        PARAMS["cluster_queue_manager"] = options.cluster_queue_manager
 
     if options.without_cluster is not None:
         PARAMS["without_cluster"] = options.without_cluster
@@ -800,37 +850,16 @@ def main(args=sys.argv):
         variable, value = variables.split("=")
         PARAMS[variable.strip()] = IOTools.str2val(value.strip())
 
-    version = None
-
-    try:
-        # this is for backwards compatibility
-        # get mercurial version
-        repo = hgapi.Repo(PARAMS["pipeline_scriptsdir"])
-        version = repo.hg_id()
-
-        status = repo.hg_status()
-        if status["M"] or status["A"]:
-            if not options.force:
-                raise ValueError(
-                    ("uncommitted change in code "
-                     "repository at '%s'. Either commit or "
-                     "use --force-output") % PARAMS["pipeline_scriptsdir"])
-            else:
-                E.warn("uncommitted changes in code repository - ignored ")
-        version = version[:-1]
-    except:
-        # try git:
-        try:
-            stdout, stderr = execute(
-                "git rev-parse HEAD", cwd=PARAMS["pipeline_scriptsdir"])
-        except:
-            stdout = "NA"
-        version = stdout
-
     if args:
         options.pipeline_action = args[0]
         if len(args) > 1:
             options.pipeline_targets.extend(args[1:])
+
+    # add input validation to check that all of the directories
+    # and files exist, provide warnings and then ask the user to
+    # specify whether they are comfortable to continue
+    if options.input_validation:
+       inputValidation(PARAMS)
 
     if options.pipeline_action == "check":
         counter, requirements = Requirements.checkRequirementsFromAllModules()
@@ -902,7 +931,6 @@ def main(args=sys.argv):
                 # session_mutex = manager.Lock()
                 E.info(E.GetHeader())
                 E.info("code location: %s" % PARAMS["pipeline_scriptsdir"])
-                E.info("code version: %s" % version)
                 E.info("Working directory is: %s" % PARAMS["workingdir"])
 
                 pipeline_run(
@@ -956,7 +984,7 @@ def main(args=sys.argv):
                 execute("inkscape %s" % filename)
                 os.unlink(filename)
 
-        except ruffus_exceptions.RethrownJobError, value:
+        except ruffus_exceptions.RethrownJobError as value:
 
             if not options.debug:
                 E.error("%i tasks with errors, please see summary below:" %
@@ -1004,7 +1032,13 @@ def main(args=sys.argv):
     elif options.pipeline_action == "dump":
         # convert to normal dictionary (not defaultdict) for parsing purposes
         # do not change this format below as it is exec'd in peekParameters()
-        print "dump = %s" % str(dict(PARAMS))
+        print("dump = %s" % str(dict(PARAMS)))
+
+    elif options.pipeline_action == "printconfig":
+        print("Printing out pipeline parameters: ")
+        for k in sorted(PARAMS):
+            print(k, "=", PARAMS[k])
+        printConfigFiles()
 
     elif options.pipeline_action == "config":
         f = sys._getframe(1)
@@ -1022,5 +1056,3 @@ def main(args=sys.argv):
                          options.pipeline_action)
 
     E.Stop()
-
-

@@ -2,7 +2,6 @@
 Read mapping pipeline
 =====================
 
-:Author: Andreas Heger
 :Release: $Id$
 :Date: |today|
 :Tags: Python
@@ -244,6 +243,7 @@ PARAMS.update(P.peekParameters(
     update_interface=True,
     restrict_interface=True))
 
+
 PipelineGeneset.PARAMS = PARAMS
 PipelineMappingQC.PARAMS = PARAMS
 
@@ -337,13 +337,17 @@ def buildReferenceGeneSet(infile, outfile):
     else:
         rna_file = None
 
+    if len(PARAMS['geneset_remove_contigs']) == 0:
+        geneset_remove_contigs = None
+    else:
+        geneset_remove_contigs = PARAMS['geneset_remove_contigs']
     gene_ids = PipelineMapping.mergeAndFilterGTF(
         infile,
         tmp_mergedfiltered,
         "%s.removed.gz" % outfile,
         genome=os.path.join(PARAMS["genome_dir"], PARAMS["genome"]),
         max_intron_size=PARAMS["max_intron_size"],
-        remove_contigs=PARAMS["geneset_remove_contigs"],
+        remove_contigs=geneset_remove_contigs,
         rna_file=rna_file)
 
     # Add tss_id and p_id
@@ -387,9 +391,9 @@ def identifyProteinCodingGenes(outfile):
 
 
 @active_if(SPLICED_MAPPING)
-@transform(buildReferenceGeneSet,
-           suffix("reference.gtf.gz"),
-           "refflat.txt")
+@follows(mkdir("geneset.dir"))
+@merge(PARAMS["annotations_interface_geneset_all_gtf"],
+       "geneset.dir/refflat.txt")
 def buildRefFlat(infile, outfile):
     '''build flat geneset for Picard RnaSeqMetrics.
     '''
@@ -436,7 +440,7 @@ def buildCodingGeneSet(infiles, outfile):
 
     statement = '''
     zcat %(infile)s
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=filter
     --filter-method=gene
     --map-tsv-file=%(genes_tsv)s
@@ -488,23 +492,23 @@ def buildIntronGeneModels(infiles, outfile):
 
     statement = '''
     zcat %(infile)s
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=filter
     --map-tsv-file=%(genes_tsv)s
     --log=%(outfile)s.log
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=sort
     --sort-order=gene
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=exons2introns
     --intron-min-length=100
     --intron-border=10
     --log=%(outfile)s.log
-    | python %(scriptsdir)s/gff2gff.py
+    | cgat gff2gff
     --method=crop
     --crop-gff-file=%(filename_exons)s
     --log=%(outfile)s.log
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=set-transcript-to-gene
     --log=%(outfile)s.log
     | awk -v OFS="\\t" -v FS="\\t" '{$3="exon"; print}'
@@ -523,7 +527,6 @@ def loadGeneInformation(infile, outfile):
     PipelineGeneset.loadTranscript2Gene(infile, outfile)
 
 
-@active_if(SPLICED_MAPPING)
 @follows(mkdir("geneset.dir"))
 @merge(PARAMS["annotations_interface_geneset_all_gtf"],
        "geneset.dir/coding_exons.gtf.gz")
@@ -545,12 +548,12 @@ def buildCodingExons(infile, outfile):
     statement = '''
     zcat %(infile)s
     | awk '$3 == "CDS"'
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=filter
     --filter-method=proteincoding
     --log=%(outfile)s.log
     | awk -v OFS="\\t" -v FS="\\t" '{$3="exon"; print}'
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=merge-exons
     --log=%(outfile)s.log
     | gzip
@@ -724,7 +727,7 @@ SEQUENCESUFFIXES = ("*.fastq.1.gz",
                     )
 
 SEQUENCEFILES = tuple([os.path.join(DATADIR, suffix_name)
-                      for suffix_name in SEQUENCESUFFIXES])
+                       for suffix_name in SEQUENCESUFFIXES])
 
 SEQUENCEFILES_REGEX = regex(
     r".*/(\S+).(fastq.1.gz|fastq.gz|fa.gz|sra|csfasta.gz|csfasta.F3.gz|export.txt.gz|remote)")
@@ -848,7 +851,7 @@ def mapReadsWithTophat(infiles, outfile):
     m = PipelineMapping.Tophat(
         executable=P.substituteParameters(**locals())["tophat_executable"],
         strip_sequence=PARAMS["strip_sequence"],
-        tool_options=PARAMS["tophat2_options"])
+        tool_options=PARAMS["tophat_options"])
     infile, reffile, transcriptfile = infiles
     tophat_options = PARAMS["tophat_options"] + \
         " --raw-juncs %(reffile)s " % locals()
@@ -1128,8 +1131,8 @@ def buildTophatStats(infiles, outfile):
 
         fn = os.path.join(indir, "prep_reads.log")
         lines = open(fn).readlines()
-        reads_removed, reads_in = map(
-            int, _select(lines, "(\d+) out of (\d+) reads have been filtered out"))
+        reads_removed, reads_in = list(map(
+            int, _select(lines, "(\d+) out of (\d+) reads have been filtered out")))
         reads_out = reads_in - reads_removed
         prep_reads_version = _select(lines, "prep_reads (.*)$")
 
@@ -1348,7 +1351,7 @@ def buildSTARStats(infiles, outfile):
             header = re.sub("%", "percent", header)
             data[header.strip()].append(value.strip())
 
-    keys = data.keys()
+    keys = list(data.keys())
     outf = IOTools.openFile(outfile, "w")
     outf.write("track\t%s\n" % "\t".join(keys))
     for x, infile in enumerate(infiles):
@@ -1656,7 +1659,6 @@ def mapReadsWithBWA(infile, outfile):
            SEQUENCEFILES_REGEX,
            r"stampy.dir/\1.stampy.bam")
 def mapReadsWithStampy(infile, outfile):
-
     '''
     Map reads with stampy
 
@@ -2044,7 +2046,7 @@ def buildBAMStats(infiles, outfile):
 
     rna_file = PARAMS["annotations_interface_rna_gff"]
 
-    job_memory = "16G"
+    job_memory = "32G"
 
     bamfile, readsfile = infiles
 
@@ -2065,8 +2067,8 @@ def buildBAMStats(infiles, outfile):
     else:
         fastq_option = ""
 
-    statement = '''python
-    %(scriptsdir)s/bam2stats.py
+    statement = '''
+    cgat bam2stats
          %(fastq_option)s
          --force-output
          --mask-bed-file=%(rna_file)s
@@ -2108,6 +2110,37 @@ def loadContextStats(infiles, outfile):
     ''' load context mapping statistics into context_stats table '''
     PipelineWindows.loadSummarizedContextStats(infiles, outfile)
 
+
+@transform(MAPPINGTARGETS,
+           suffix(".bam"),
+           ".idxstats")
+def buildIdxstats(infile, outfile):
+    '''gets idxstats for bam file so number of reads per chromosome can
+    be plotted later'''
+
+    statement = '''samtools idxstats %(infile)s > %(outfile)s''' % locals()
+    P.run()
+
+
+@jobs_limit(PARAMS.get("jobs_limit_db", 1), "db")
+@merge(buildIdxstats, "idxstats_reads_per_chromosome.load")
+def loadIdxstats(infiles, outfile):
+    '''merge idxstats files into single dataframe and load
+    to database
+
+    Loads tables into the database
+       * mapped_reads_per_chromosome
+
+    Arguments
+    ---------
+    infiles : list
+        list where each element is a string of the filename containing samtools
+        idxstats output. Filename format is expected to be 'sample.idxstats'
+    outfile : string
+        Logfile. The table name will be derived from `outfile`.'''
+
+    PipelineMappingQC.loadIdxstats(infiles, outfile)
+
 ###################################################################
 ###################################################################
 ###################################################################
@@ -2140,7 +2173,7 @@ def buildExonValidation(infiles, outfile):
 
     infile, exons = infiles
     statement = '''cat %(infile)s
-    | python %(scriptsdir)s/bam_vs_gtf.py
+    | cgat bam_vs_gtf
          --exons-file=%(exons)s
          --force-output
          --log=%(outfile)s.log
@@ -2218,7 +2251,7 @@ def buildTranscriptLevelReadCounts(infiles, outfile):
 
     statement = '''
     zcat %(geneset)s
-    | python %%(scriptsdir)s/gtf2table.py
+    | cgat gtf2table
     --reporter=transcripts
     --bam-file=%(infile)s
     --counter=length
@@ -2288,7 +2321,7 @@ def buildIntronLevelReadCounts(infiles, outfile):
 
     statement = '''
     zcat %(exons)s
-    | python %(scriptsdir)s/gtf2table.py
+    | cgat gtf2table
           --reporter=genes
           --bam-file=%(infile)s
           --counter=length
@@ -2385,7 +2418,7 @@ def buildTranscriptProfiles(infiles, outfile):
 
     job_memory = "8G"
 
-    statement = '''python %(scriptsdir)s/bam2geneprofile.py
+    statement = '''cgat bam2geneprofile
     --output-filename-pattern="%(outfile)s.%%s"
     --force-output
     --reporter=transcript
@@ -2397,6 +2430,46 @@ def buildTranscriptProfiles(infiles, outfile):
     > %(outfile)s
     '''
 
+    P.run()
+
+
+@transform(MAPPINGTARGETS,
+           suffix(".bam"),
+           add_inputs(buildCodingExons),
+           ".geneprofile.gz")
+def buildGeneProfiles(infiles, outfile):
+    '''build gene coverage profiles
+
+    Gene coverage plots are useful to determine mapping location
+    for a number of genomic techniques.
+
+    In addition to the outfile specified by the task, plots will be
+    saved with full and focus views of the meta-profile
+
+    Parameters
+    ----------
+    infiles : list of str
+    infiles[0] : str
+       Input filename in :term:`bam` format
+    infiles[1] : str`
+       Input filename in :term:`gtf` format
+
+    outfile : str
+       Output filename in :term:`tsv` format
+    '''
+
+    bamfile, gtffile = infiles
+    job_memory = "8G"
+
+    statement = '''cgat bam2geneprofile
+                --method=geneprofilewithintrons
+                --bam-file=%(bamfile)s
+                --gtf-file=%(gtffile)s
+                --normalize-transcript=total-sum
+                --normalize-profile=area
+                --log=%(outfile)s.log
+                --output-filename-pattern=%(outfile)s.%%s
+                > %(outfile)s '''
     P.run()
 
 
@@ -2478,7 +2551,7 @@ def buildBigWig(infile, outfile):
     else:
         # wigToBigWig observed to use 16G
         job_memory = "16G"
-        statement = '''python %(scriptsdir)s/bam2wiggle.py
+        statement = '''cgat bam2wiggle
         --output-format=bigwig
         %(bigwig_options)s
         %(infile)s
@@ -2513,14 +2586,14 @@ def loadBigWigStats(infiles, outfile):
         P.toTable(outfile),
         options="--add-index=track")
 
-    statement = '''python %(scriptsdir)s/combine_tables.py
+    statement = '''cgat combine_tables
     --header-names=%(headers)s
     --skip-titles
     --missing-value=0
     --ignore-empty
     %(data)s
     | perl -p -e "s/bin/track/"
-    | python %(scriptsdir)s/table2table.py --transpose
+    | cgat table2table --transpose
     | %(load_statement)s
     > %(outfile)s
     '''
@@ -2544,7 +2617,7 @@ def buildBed(infile, outfile):
 
     statement = '''
     cat %(infile)s
-    | python %(scriptsdir)s/bam2bed.py
+    | cgat bam2bed
           %(bed_options)s
           --log=%(outfile)s.log
           -
@@ -2585,7 +2658,9 @@ def buildIGVSampleInformation(infiles, outfile):
 @follows(loadReadCounts,
          loadPicardStats,
          loadBAMStats,
-         loadContextStats)
+         buildGeneProfiles,
+         loadContextStats,
+         loadIdxstats)
 def general_qc():
     pass
 
@@ -2596,7 +2671,8 @@ def general_qc():
          loadTranscriptLevelReadCounts,
          loadIntronLevelReadCounts,
          buildTranscriptProfiles,
-         loadPicardRnaSeqMetrics)
+         loadPicardRnaSeqMetrics,
+         loadIdxstats)
 def spliced_qc():
     pass
 
@@ -2685,7 +2761,7 @@ def publish():
     }
 
     if PARAMS['ucsc_exclude']:
-        for filetype, files in export_files.iteritems():
+        for filetype, files in export_files.items():
             new_files = set(files)
             for f in files:
                 for regex in P.asList(PARAMS['ucsc_exclude']):

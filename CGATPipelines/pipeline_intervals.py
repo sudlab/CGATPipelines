@@ -1,4 +1,3 @@
-
 """=================
 Interval pipeline
 =================
@@ -184,9 +183,9 @@ import CGATPipelines.Pipeline as P
 import CGAT.IOTools as IOTools
 import CGAT.Bed as Bed
 import CGAT.MatrixTools as MatrixTools
-import PipelinePeakcalling as PipelinePeakcalling
-import PipelineMotifs as PipelineMotifs
-import PipelineWindows as PipelineWindows
+import CGATPipelines.PipelinePeakcalling as PipelinePeakcalling
+import CGATPipelines.PipelineMotifs as PipelineMotifs
+import CGATPipelines.PipelineWindows as PipelineWindows
 import CGATPipelines.PipelineTracks as PipelineTracks
 
 
@@ -296,13 +295,13 @@ def getAssociatedBAMFiles(track):
 
     offsets = []
     if "offsets_%s" % fn.lower() in PARAMS:
-        offsets = map(int, P.asList(PARAMS["offsets_%s" % fn.lower()]))
+        offsets = list(map(int, P.asList(PARAMS["offsets_%s" % fn.lower()])))
     else:
         for pattern, value in P.CONFIG.items("offsets"):
             if "%" in pattern:
                 p = re.sub("%", "\S+", pattern)
                 if re.search(p, fn):
-                    offsets.extend(map(int, value.split(",")))
+                    offsets.extend(list(map(int, value.split(","))))
 
     if offsets == []:
         offsets = [0] * len(bamfiles)
@@ -379,6 +378,11 @@ def buildProcessingSummary(infiles, outfile):
 def indexIntervals(infile, outfile):
     '''index intervals with tabix.
     '''
+
+    # patch for Jenkins - make sure file exists. Some files
+    # seem to appear with a lag.
+    P.touch(outfile)
+
     statement = '''zcat %(infile)s
     | sort -k1,1 -k2,2n
     | bgzip > %(outfile)s;
@@ -411,7 +415,7 @@ def loadIntervals(infile, outfile):
                "peakcenter", "peakval",
                "position", "interval_id",
                "npeaks", "nprobes",
-               "contig", "start", "end", "score", "strand")
+               "contig", "start", "end", "score")
 
     tmpfile.write("\t".join(headers) + "\n")
 
@@ -442,11 +446,6 @@ def loadIntervals(infile, outfile):
         if "name" not in bed:
             bed.name = c.input
 
-        try:
-            strand = bed["strand"]
-        except IndexError:
-            strand = "."
-            
         # The fifth field of a bed file can be used to supply a
         # score. Our iterator returns the optional fields as a "fields
         # array". The first of these is the interval name, and the
@@ -473,19 +472,10 @@ def loadIntervals(infile, outfile):
                 c.skipped_reads += 1
 
         else:
-            # deal with bed12
-            bed_intervals = bed.toIntervals()
-            length = sum([e - s for s, e in bed_intervals])
-            mid_point = length / 2
-            for s, e in bed_intervals:
-                peakcenter = s + mid_point
-                if peakcenter >= e:
-                    mid_point = peakcenter - e
-                else:
-                    break
-
-            npeaks, avgval, peakval, nprobes = \
+            npeaks, peakcenter, length, avgval, peakval, nprobes = \
                 (1,
+                 bed.start + (bed.end - bed.start) // 2,
+                 bed.end - bed.start,
                  1,
                  1,
                  1)
@@ -496,7 +486,7 @@ def loadIntervals(infile, outfile):
             (avgval, disttostart, genelist, length,
              peakcenter, peakval, position, bed.name,
              npeaks, nprobes,
-             bed.contig, bed.start, bed.end, score, strand))) + "\n")
+             bed.contig, bed.start, bed.end, score))) + "\n")
 
     if c.output == 0:
         E.warn("%s - no aggregate intervals")
@@ -554,7 +544,7 @@ def prepareGTFsByOverlapWithIntervals(infile, outfiles):
     # do not checkpoint, as some files might be empty
     statement = '''
     intersectBed -u -a %(geneset)s -b %(track)s.bed.gz
-    | python %(scriptsdir)s/gff2bed.py --is-gtf -v 0
+    | cgat gff2bed --is-gtf -v 0
     | cut -f4
     | sort
     | uniq > %(track)s_overlapping_genes;
@@ -612,7 +602,7 @@ def annotateIntervals(infile, outfile):
 
     statement = """
     zcat < %(infile)s
-    | python %(scriptsdir)s/bed2table.py
+    | cgat bed2table
     --output-bed-headers=contig,start,end
     --counter=classifier-chipseq
     --counter=length
@@ -641,11 +631,11 @@ def annotateBinding(infile, outfile):
 
     statement = """
     zcat < %(geneset)s
-    | python %(scriptsdir)s/gtf2gtf.py
+    | cgat gtf2gtf
     --method=filter
     --filter-method=proteincoding
     --log=%(outfile)s.log
-    | python %(scriptsdir)s/gtf2table.py
+    | cgat gtf2table
     --counter=position
     --counter=binding-pattern
     --log=%(outfile)s.log
@@ -663,19 +653,14 @@ def annotateBinding(infile, outfile):
 def annotateTSS(infile, outfile):
     '''compute distance to TSS'''
 
-    try:
-        annotation_file = os.path.join(
-            PARAMS["annotations_dir"],
-            PARAMS["annotations_interface_geneset_coding_gene_tss_bed"])
-    except KeyError:
-        annotation_file = os.path.join(
-            PARAMS["annotations_dir"],
-            PARAMS["annotations_interface_tss_bed"])
+    annotation_file = os.path.join(
+        PARAMS["annotations_dir"],
+        PARAMS["annotations_interface_geneset_coding_gene_tss_bed"])
 
     statement = """
     zcat < %(infile)s
-    | python %(scriptsdir)s/bed2gff.py --as-gtf
-    | python %(scriptsdir)s/gtf2table.py
+    | cgat bed2gff --as-gtf
+    | cgat gtf2table
     --counter=distance-tss
     --log=%(outfile)s.log
     --gff-file=%(annotation_file)s
@@ -700,8 +685,8 @@ def annotateRepeats(infile, outfile):
 
     statement = """
     zcat < %(infile)s
-    | python %(scriptsdir)s/bed2gff.py --as-gtf
-    | python %(scriptsdir)s/gtf2table.py
+    | cgat bed2gff --as-gtf
+    | cgat gtf2table
     --counter=overlap
     --log=%(outfile)s.log
     --gff-file=%(annotation_file)s
@@ -724,9 +709,9 @@ def annotateComposition(infile, outfile):
     # start of the pipeline and assign unique identifiers.
     statement = '''zcat %(infile)s
     | cut -f 1,2,3
-    | python %(scriptsdir)s/bed2gff.py --as-gtf
-    | python %(scriptsdir)s/gtf2table.py
-    --counter=position,composition-cpg
+    | cgat bed2gff --as-gtf
+    | cgat gtf2table
+    --counter=composition-cpg
     --genome-file=%(genome_dir)s/%(genome)s
     | gzip
     > %(outfile)s
@@ -743,8 +728,8 @@ def annotateTSSComposition(infile, outfile):
 
     statement = '''zcat %(infile)s
     | slopBed -b 50 -g %(annotations_interface_contigs_tsv)s
-    | python %(scriptsdir)s/bed2gff.py --as-gtf
-    | python %(scriptsdir)s/gtf2table.py
+    | cgat bed2gff --as-gtf
+    | cgat gtf2table
     --counter=position
     --counter=composition-cpg
     --genome-file=%(genome_dir)s/%(genome)s
@@ -782,7 +767,7 @@ def buildIntervalProfileOfTranscripts(infiles, outfile):
 
     bedfile, gtffile = infiles
 
-    statement = '''python %(scriptsdir)s/bam2geneprofile.py
+    statement = '''cgat bam2geneprofile
     --output-filename-pattern="%(outfile)s.%%s"
     --force-output
     --reporter=transcript
@@ -830,7 +815,7 @@ def buildTranscriptsByIntervalsProfiles(infile, outfile):
     outpat = outfile[:-len(".tsv.gz")]
 
     statement = '''
-    python %(scriptsdir)s/bam2geneprofile.py
+    cgat bam2geneprofile
     --output-filename-pattern="%(outpat)s.%%s"
     --force-output
     --reporter=transcript
@@ -892,7 +877,7 @@ def buildPeakShapeTable(infile, outfile):
     if shift:
         E.info("applying read shift %i for track %s" % (shift, track))
 
-    statement = '''python %(scriptsdir)s/bam2peakshape.py
+    statement = '''cgat bam2peakshape
                       --window-size=%(peakshape_window_size)i
                       --bin-size=%(peakshape_bin_size)i
                       --output-filename-pattern="%(outfile)s.%%s"
@@ -933,7 +918,7 @@ def buildOverlap(infiles, outfile):
 
     # note: need to quote track names
     statement = '''
-    python %(scriptsdir)s/diff_bed.py %(options)s %(infiles)s
+    cgat diff_bed %(options)s %(infiles)s
     | awk -v OFS="\\t" '!/^#/ { gsub( /-/,"_", $1); gsub(/-/,"_",$2); } {print}'
     > %(outfile)s
     '''
@@ -949,9 +934,11 @@ def loadOverlap(infile, outfile):
            tablename="overlap",
            options="--add-index=set1 --add-index=set2")
 
-    P.run()
 
-def exportIntervalSequences(infile, outfile, track, method):
+@transform(loadIntervals,
+           suffix("_intervals.load"),
+           ".motifs.fasta")
+def exportMotifSequences(infile, outfile):
     '''export sequences for motif discovery.
 
     This method requires the _interval tables.
@@ -966,35 +953,24 @@ def exportIntervalSequences(infile, outfile, track, method):
     4. At most *motifs_max_size* sequences will be output.
 
     '''
+    track = os.path.basename(P.snip(infile, "_intervals.load"))
     dbhandle = connect()
 
-    try:
-        halfwidth = int(PARAMS[method+"_halfwidth"])
-        full = False
-    except ValueError:
-        full = True
-        halfwidth = None
-
-    try:
-        maxsize = int(PARAMS[method+"_max_size"])
-    except ValueError:
-        maxsize = None
-
+    p = P.substituteParameters(**locals())
     nseq = PipelineMotifs.writeSequencesForIntervals(
         track,
         outfile,
         dbhandle,
-        full=full,
-        masker=P.asList(PARAMS[method+'_masker']),
-        halfwidth=halfwidth,
-        maxsize=maxsize,
-        num_sequences=PARAMS[method+"_num_sequences"],
-        proportion=PARAMS[method+"_proportion"],
-        min_sequences=PARAMS[method+"_min_sequences"],
-        order=PARAMS[method+'_score'])
+        full=False,
+        masker=P.asList(p['motifs_masker']),
+        halfwidth=int(p["motifs_halfwidth"]),
+        maxsize=int(p["motifs_max_size"]),
+        proportion=p["motifs_proportion"],
+        min_sequences=p["motifs_min_sequences"],
+        order=p['motifs_score'])
 
     if nseq == 0:
-        E.warn("%s: no sequences - %s skipped" % (outfile, method))
+        E.warn("%s: no sequences - meme skipped" % outfile)
         P.touch(outfile)
 
 
@@ -1032,23 +1008,7 @@ def exportMotifControlSequences(infile, outfile):
 ############################################################
 ############################################################
 ############################################################
-@active_if("meme" in P.asList(PARAMS["methods"]) or
-           "disc_meme" in P.asList(PARAMS["methods"]))
-@transform(loadIntervals,
-           suffix("_intervals.load"),
-           ".meme.fasta")
-def exportMemeIntervalSequences(infile, outfile):
-    
-    track = os.path.basename(P.snip(infile, "_intervals.load"))
-
-    exportIntervalSequences(infile, outfile, track, "meme")
-
-
-############################################################
-@follows(mkdir("meme.dir"))
-@active_if("meme" in P.asList(PARAMS["methods"]))
-@transform(exportMemeIntervalSequences, regex("(.+).meme.fasta"),
-           r"meme.dir/\1.meme")
+@transform(exportMotifSequences, suffix(".motifs.fasta"), ".meme")
 def runMeme(infile, outfile):
     '''run MEME to find motifs.
 
@@ -1065,442 +1025,24 @@ def runMeme(infile, outfile):
     '''
     PipelineMotifs.runMEMEOnSequences(infile, outfile)
 
-
-@transform(runMeme,
-           regex("(.+)"),
-           r"\1.self_matches")
-def memeSelfMatches(infile, outfile):
-    '''Compare output of MEME and DREME to itself so that similar 
-    motifs within runs can be clustered '''
-
-    PipelineMotifs.tomtom_comparison(infile, infile, outfile)
-
-
-############################################################
-@transform(memeSelfMatches,
-           regex("(.+).self_matches"),
-           add_inputs(r"\1"),
-           r"\1.seeds")
-def getMemeSeeds(infiles, outfile):
-    ''' extract seed motifs for MEME and DREME output '''
-
-    alignments, motifs = infiles
-    PipelineMotifs.getSeedMotifs(motifs, alignments, outfile)
-
-############################################################
-@permutations(getMemeSeeds,
-              formatter("meme.dir/(?P<TRACK>.+).meme.seeds"),
-              2,
-              r"meme.dir/{TRACK[0][0]}_to_{TRACK[1][0]}.tomtom")
-def compareMemeTracks(infiles, outfile):
-    '''Use tomtom to look if simlar motifs have been foundin more than one
-    track '''
-
-    track1, track2 = infiles
-
-    PipelineMotifs.tomtom_comparison(track1, track2, outfile)
-
-
-############################################################
-@follows(compareMemeTracks)
-def meme():
-    pass
-
-############################################################
-def getdescMEMEfiles():
-
-    try:
-        design = IOTools.openFile("design.tsv")
-    except OSError:
-        raise "A design.tsv must be supplied for descriminative MEME analysis"
-
-    design.readline()
-    for line in design:
-
-        pos, neg = line.strip().split("\t")
-        posf = "%s.meme.fasta" % pos
-        negf = "%s.meme.fasta" % neg
-        out = "disc_meme.dir/%s_vs_%s.psp" %(pos,neg)
-        yield ((posf, negf), out)
-
-
-@active_if("disc_meme" in P.asList(PARAMS["methods"]))
-@follows(exportMemeIntervalSequences, mkdir("disc_meme.dir"))
-@files(getdescMEMEfiles)
-def getDiscMEMEPSPFile(infiles, outfile):
-    '''Get the position specific prior file to allow
-    discriminative motif finding with meme '''
-
-    pos, neg = infiles
-    PipelineMotifs.generatePSP(pos, neg, outfile)
-
-
-############################################################
-@transform(getDiscMEMEPSPFile,
-           regex("disc_meme.dir/(.+)_vs_(.+).psp"),
-           add_inputs(r"\1.meme.fasta"),
-           r"disc_meme.dir/\1_vs_\2.meme")
-def runDiscMEME(infiles, outfile):
-    ''' Run MEME with PSP file, therefore making it 
-    discrimenative'''
-
-    psp, fasta = infiles
-    PipelineMotifs.runMEMEOnSequences(fasta, outfile, psp=psp)
-
-
-############################################################
-@transform(runDiscMEME,
-           regex("(.+)"),
-           r"\1.self_matches")
-def discMemeSelfMatches(infile, outfile):
-    '''Compare output of MEME and DREME to itself so that similar 
-    motifs within runs can be clustered '''
-
-    PipelineMotifs.tomtom_comparison(infile, infile, outfile)
-
-
-############################################################
-@transform(discMemeSelfMatches,
-           regex("(.+).self_matches"),
-           add_inputs(r"\1"),
-           r"\1.seeds")
-def getDiscMemeSeeds(infiles, outfile):
-    ''' extract seed motifs for MEME and DREME output '''
-
-    alignments, motifs = infiles
-    PipelineMotifs.getSeedMotifs(motifs, alignments, outfile)
-
-
-############################################################
-@permutations(getDiscMemeSeeds,
-              formatter("disc_meme.dir/(?P<TRACK>.+).meme.seeds"),
-              2,
-              r"disc_meme.dir/{TRACK[0][0]}_to_{TRACK[1][0]}.tomtom")
-def compareDiscMemeTracks(infiles, outfile):
-    '''Use tomtom to look if simlar motifs have been foundin more than one
-    track '''
-
-    track1, track2 = infiles
-
-    PipelineMotifs.tomtom_comparison(track1, track2, outfile)
-
-
-############################################################
-@follows(compareDiscMemeTracks)
-def discMeme():
-    pass
-
-
-############################################################
-# DREME
-############################################################
-@active_if("rand_dreme" in PARAMS["methods"] or
-           "disc_dreme" in PARAMS["methods"])
-@transform(loadIntervals,
-           suffix("_intervals.load"),
-           ".dreme.fasta")
-def exportDremeIntervalSequences(infile, outfile):
-    
-    track = os.path.basename(P.snip(infile, "_intervals.load"))
-
-    exportIntervalSequences(infile, outfile, track, "dreme")
-
-
-############################################################
-@active_if("rand_dreme" in PARAMS["methods"])
-@follows(mkdir("rand_dreme.dir"))
-@transform(exportDremeIntervalSequences,
-           regex("(.+).dreme.fasta"),
-           r"rand_dreme.dir/\1.dreme")
-def runRandDreme(infile, outfile):
-    '''Run DREME with a randomised negative set'''
-
-    PipelineMotifs.runDREME(infile, outfile)
-
-
-############################################################
-@transform(runRandDreme,
-           regex("(.+)"),
-           r"\1.self_matches")
-def randDremeSelfMatches(infile, outfile):
-    '''Compare output of MEME and DREME to itself so that similar 
-    motifs within runs can be clustered '''
-
-    PipelineMotifs.tomtom_comparison(infile, infile, outfile)
-
-
-############################################################
-@transform(randDremeSelfMatches,
-           regex("(.+).self_matches"),
-           add_inputs(r"\1"),
-           r"\1.seeds")
-def getRandDremeSeeds(infiles, outfile):
-    ''' extract seed motifs for MEME and DREME output '''
-
-    alignments, motifs = infiles
-    PipelineMotifs.getSeedMotifs(motifs, alignments, outfile)
-
-
-############################################################
-@permutations(getRandDremeSeeds,
-              formatter("rand_dreme.dir/(?P<TRACK>.+).dreme.seeds"),
-              2,
-              r"rand_dreme.dir/{TRACK[0][0]}_to_{TRACK[1][0]}.tomtom")
-def compareRandDremeTracks(infiles, outfile):
-    '''Use tomtom to look if simlar motifs have been foundin more than one
-    track '''
-
-    track1, track2 = infiles
-
-    PipelineMotifs.tomtom_comparison(track1, track2, outfile)
-
-
-############################################################
-@follows(compareRandDremeTracks)
-def randDreme():
-    pass
-
-
-############################################################
-def getDiscDREMEFiles():
-
-    try:
-        design = IOTools.openFile("design.tsv")
-    except OSError:
-        raise "A design.tsv must be supplied for descriminative DREME analysis"
-
-    design.readline()
-    for line in design:
-
-        pos, neg = line.strip().split("\t")
-        posf = "%s.dreme.fasta" % pos
-        negf = "%s.dreme.fasta" % neg
-        out = "disc_dreme.dir/%s_vs_%s.dreme" %(pos,neg)
-        yield ((posf, negf), out)
-
-@active_if("disc_dreme" in PARAMS["methods"])
-@follows(mkdir("disc_dreme.dir"), exportDremeIntervalSequences)
-@files(getDiscDREMEFiles)
-def runDiscDREME(infiles, outfile):
-    '''Run discriminative DREME using control file speicied
-    in design.tsv'''
-
-    infile, negatives = infiles
-    PipelineMotifs.runDREME(infile, outfile, neg_file=negatives)
-
-
-############################################################
-@transform(runDiscDREME,
-           regex("(.+)"),
-           r"\1.self_matches")
-def discDremeSelfMatches(infile, outfile):
-    '''Compare output of MEME and DREME to itself so that similar 
-    motifs within runs can be clustered '''
-
-    PipelineMotifs.tomtom_comparison(infile, infile, outfile)
-
-
-############################################################
-@transform(discDremeSelfMatches,
-           regex("(.+).self_matches"),
-           add_inputs(r"\1"),
-           r"\1.seeds")
-def getDiscDremeSeeds(infiles, outfile):
-    ''' extract seed motifs for MEME and DREME output '''
-
-    alignments, motifs = infiles
-    PipelineMotifs.getSeedMotifs(motifs, alignments, outfile)
-
-
-############################################################
-@permutations(getDiscDremeSeeds,
-              formatter("disc_dreme.dir/(?P<TRACK>.+).dreme.seeds"),
-              2,
-              r"disc_dreme.dir/{TRACK[0][0]}_to_{TRACK[1][0]}.tomtom")
-def compareDiscDremeTracks(infiles, outfile):
-    '''Use tomtom to look if simlar motifs have been foundin more than one
-    track '''
-
-    track1, track2 = infiles
-
-    PipelineMotifs.tomtom_comparison(track1, track2, outfile)
-
-
-############################################################
-@follows(compareDiscDremeTracks)
-def discDreme():
-    pass
-
-
-############################################################
-#MEME-ChIP
-############################################################
-@active_if("memechip" in PARAMS["methods"])
-@transform(loadIntervals,
-           suffix("_intervals.load"),
-           ".memechip.fasta")
-def exportMemeCHiPIntervalSequences(infile, outfile):
-    
-    track = os.path.basename(P.snip(infile, "_intervals.load"))
-
-    exportIntervalSequences(infile, outfile, track, "memechip")
-
-
-############################################################
-@active_if("memechip" in PARAMS["methods"])
-@follows(mkdir("memechip.dir"))
-@transform(exportMemeCHiPIntervalSequences,
-           regex("./(.+).memechip.fasta"),
-           add_inputs("*.motif"),
-           r"memechip.dir/\1.memechip")
-def runMemeChIP(infiles, outfile):
-    '''Run the MEME-ChIP pipeline, optionally with 
-    reference motif sequences'''
-
-    infile, motifs = infiles[0], infiles[1:]
-
-    PipelineMotifs.runMemeCHIP(infile, outfile, motifs)
-
-
-############################################################
-@transform(runMemeChIP,
-           regex("memechip.dir/(.+).memechip"),
-           r"memechip.dir/\1.memechip.seeds")
-def getMemeChipSeedMotifs(infile, outfile):
-    ''' extract the seed motifs from the MEME-ChIP output'''
-
-    motifs = infile
-    track = os.path.basename(motifs)
-    alignments = os.path.join(PARAMS["exportdir"],
-                              "memechip.dir",
-                              track,
-                              "motif_alignment.txt")
-                              
-    PipelineMotifs.getSeedMotifs(motifs, alignments, outfile)
-
-
-############################################################
-@permutations(getMemeChipSeedMotifs,
-              formatter("memechip.dir/(?P<TRACK>.+).memechip.seeds"),
-              2,
-              r"memechip.dir/{TRACK[0][0]}_to_{TRACK[1][0]}.tomtom")
-def compareMemeChipTracks(infiles, outfile):
-    '''Use tomtom to look if simlar motifs have been foundin more than one
-    track '''
-
-    track1, track2 = infiles
-
-    PipelineMotifs.tomtom_comparison(track1, track2, outfile)
-
-
-############################################################
-@transform(getMemeChipSeedMotifs,
-           regex("(.+).seeds"),
-           r"\1.tsv")
-def getMemeChipSeedTables(infile, outfile):
-
-    statement = '''python %(scriptsdir)s/meme2table.py
-                       -I %(infile)s
-                       -S %(outfile)s
-                       -L %(outfile)s.log'''
-    P.run()
-
-
-############################################################
-@subdivide(getMemeChipSeedTables,
-           regex("memechip.dir/(.+).tsv"),
-           add_inputs(r"memechip.dir/\1.seeds"),
-           r"memechip.dir/\1*.png")
-def getSeqlogosFromMemeChip(infiles, outfiles):
-    '''get png seqlogos for each of the seed motifs found'''
-
-    table, memefile = infiles
-    track = re.match("memechip.dir/(.+).memechip.tsv",table).groups()[0]
-    statement = []
-    for nmotif, motif in enumerate(IOTools.openFile(table)):
-        if motif.startswith("primary_id"):
-            continue
-        motif_id = motif.split("\t")[0]
-        outfile = "memechip.dir/%(track)s_%(motif_id)s.png" % locals()
-        statement.append('''ceqlogo -i%(nmotif)s %(memefile)s -h 7.5 -t "" -x "" -y ""
-                                    | convert - %(outfile)s ''' % locals())
-
-    statement = "; checkpoint;".join(statement)
-    P.run()
-
-
-############################################################
-@follows(getSeqlogosFromMemeChip,
-         compareMemeChipTracks)
-def memechip():
-    pass
-
-
 ############################################################
 ############################################################
-@collate([compareMemeChipTracks,
-          compareMemeTracks,
-          compareDiscMemeTracks,
-          compareRandDremeTracks,
-          compareDiscDremeTracks],
-         regex("(.+).dir/(.+).tomtom"),
-         r"\1.dir/\1.track_comparisons.load")
-def mergeAndLoadTrackComparisons(infiles, outfile):
-    
-    P.concatenateAndLoad(infiles, outfile,
-                         regex_filename=(".+/(.+)_to_(.+).tomtom"),
-                         cat="track1,track2",
-                         options="-i track1 -i track2")
-
-
 ############################################################
-@transform([getMemeSeeds,
-            getDiscMemeSeeds,
-            getRandDremeSeeds,
-            getDiscDremeSeeds],
-           regex("(.+).seeds"),
-           r"\1.tsv")
-def getMemeDremeSeedTables(infile, outfile):
-
-    statement = '''python %(scriptsdir)s/meme2table.py
-                       -I %(infile)s
-                       -S %(outfile)s
-                       -L %(outfile)s.log'''
-    P.run()
 
 
-############################################################
-@collate([getMemeChipSeedTables,
-          getMemeDremeSeedTables],
-         regex("(.+).dir/(.+).tsv"),
-         r"\1.dir/\1_seeds.load")
-def loadSeedTables(infiles, outfile):
-
-    P.concatenateAndLoad(infiles, outfile,
-                         regex_filename=".+/(.+)\.(?:meme|dreme|memechip).tsv")
-
-
-############################################################
-@collate([runMeme,
-          runDiscMEME,
-          runRandDreme,
-          runDiscDREME,
-          runMemeChIP],
-         regex("(?:.+_)?(.+).dir/(.+)"),
-         r"\1_summary.load")
+@merge(runMeme, "meme_summary.load")
 def loadMemeSummary(infiles, outfile):
     '''load information about motifs into database.'''
 
     outf = P.getTempFile(".")
 
-    outf.write("method\ttrack\n")
+    outf.write("track\n")
 
     for infile in infiles:
         if IOTools.isEmpty(infile):
             continue
-        method = re.match("(.+).dir/", infile).groups()[0]
-        track = os.path.basename(".".join(infile.split(".")[:-1]))
-        outf.write("%s\t%s\n" % (method,track))
+        motif = P.snip(infile, ".meme")
+        outf.write("%s\n" % motif)
 
     outf.close()
 
@@ -1509,10 +1051,7 @@ def loadMemeSummary(infiles, outfile):
     os.unlink(outf.name)
 
 
-############################################################
-@transform([exportMemeIntervalSequences,
-            exportDremeIntervalSequences,
-            exportMemeCHiPIntervalSequences],
+@transform(exportMotifSequences,
            suffix(".fasta"),
            ".motifseq_stats.load")
 def loadMotifSequenceComposition(infile, outfile):
@@ -1522,7 +1061,7 @@ def loadMotifSequenceComposition(infile, outfile):
         P.toTable(outfile))
 
     statement = '''
-    python %(scriptsdir)s/fasta2table.py
+    cgat fasta2table
         --section=na
         --log=%(outfile)s
     < %(infile)s
@@ -1532,44 +1071,6 @@ def loadMotifSequenceComposition(infile, outfile):
     P.run()
 
 
-############################################################
-@transform([getMemeSeeds,
-            getDiscMemeSeeds,
-            getRandDremeSeeds,
-            getDiscDremeSeeds],
-           regex("(.+).seeds"),
-           r"\1.tomtom")
-def runTomTom(infile, outfile):
-    '''compare ab-initio motifs against a databse of known motifs'''
-    PipelineMotifs.runTomTom(infile, outfile)
-
-
-############################################################
-@transform(runTomTom, suffix(".tomtom"), "_tomtom.load")
-def loadTomTom(infile, outfile):
-    '''load tomtom results'''
-    PipelineMotifs.loadTomTom(infile, outfile)
-
-
-############################################################
-@follows(meme,
-         discMeme,
-         randDreme,
-         discDreme,
-         memechip,
-         loadTomTom,
-         loadMotifSequenceComposition,
-         loadMemeSummary,
-         loadSeedTables,
-         mergeAndLoadTrackComparisons)
-def Motifs():
-    pass
-
-############################################################
-############################################################
-############################################################
-
-
 @merge("*.motif", "motif_info.load")
 def loadMotifInformation(infiles, outfile):
     '''load information about motifs into database.'''
@@ -1577,7 +1078,7 @@ def loadMotifInformation(infiles, outfile):
     outf = P.getTempFile(".")
 
     outf.write("motif\n")
- 
+
     for infile in infiles:
         if IOTools.isEmpty(infile):
             continue
@@ -1589,6 +1090,68 @@ def loadMotifInformation(infiles, outfile):
     P.load(outf.name, outfile, "--allow-empty-file")
 
     os.unlink(outf.name)
+
+############################################################
+############################################################
+############################################################
+# run against database of known motifs
+############################################################
+
+
+@transform(runMeme, suffix(".meme"), ".tomtom")
+def runTomTom(infile, outfile):
+    '''compare ab-initio motifs against tomtom.'''
+    PipelineMotifs.runTomTom(infile, outfile)
+
+
+@transform(runTomTom, suffix(".tomtom"), "_tomtom.load")
+def loadTomTom(infile, outfile):
+    '''load tomtom results'''
+
+    tablename = P.toTable(outfile)
+
+    resultsdir = os.path.join(
+        os.path.abspath(PARAMS["exportdir"]), "tomtom", infile)
+    xml_file = os.path.join(resultsdir, "tomtom.xml")
+
+    if not os.path.exists(xml_file):
+        E.warn("no tomtom output - skipped loading ")
+        P.touch(outfile)
+        return
+
+    # get the motif name from the xml file
+    tree = xml.etree.ElementTree.ElementTree()
+    tree.parse(xml_file)
+    motifs = tree.find("targets")
+    name2alt = {}
+    for motif in motifs.getiterator("motif"):
+        name = motif.get("name")
+        if name is None:
+            name = motif.get("id")
+        alt = motif.get("alt")
+        if alt is None:
+            alt = name
+        name2alt[name] = alt
+
+    tmpfile = P.getTempFile(".")
+
+    # parse the text file
+    for line in IOTools.openFile(infile):
+        if line.startswith("#Query"):
+            tmpfile.write('\t'.join(
+                ("target_name", "query_id", "target_id",
+                 "optimal_offset", "pvalue", "evalue",
+                 "qvalue", "Overlap", "query_consensus",
+                 "target_consensus", "orientation")) + "\n")
+            continue
+        data = line[:-1].split("\t")
+        target_name = name2alt[data[1]]
+        tmpfile.write("%s\t%s" % (target_name, line))
+    tmpfile.close()
+
+    P.load(tmpfile.name, outfile)
+
+    os.unlink(tmpfile.name)
 
 ############################################################
 ############################################################
@@ -2091,7 +1654,7 @@ def summarizeReadCounts(infile, outfile):
 
     prefix = P.snip(outfile, ".tsv")
     job_memory = "32G"
-    statement = '''python %(scriptsdir)s/runExpression.py
+    statement = '''cgat runExpression
               --method=summary
               --tags-tsv-file=%(infile)s
               --output-filename-pattern=%(prefix)s_
@@ -2268,25 +1831,22 @@ def annotate_intervals():
 # def views():
 #     pass
 
+###################################################################
+###################################################################
+###################################################################
 
-###################################################################
-###################################################################
-###################################################################
 
 @follows(annotate_intervals,
-         annotate_withreads)
-def annotation():
-    pass
-
-
-@follows(loadByIntervalProfiles)
-def profiles():
-    pass
-
-
-@follows(annotation,
-         profiles,
-         Motifs,
+         annotate_withreads,
+         loadByIntervalProfiles,
+         runMeme,
+         loadMemeSummary,
+         loadTomTom,
+         loadMotifInformation,
+         loadMast,
+         loadMotifInformation,
+         loadMotifSequenceComposition,
+         loadOverlap,
          gat)
 def full():
     '''run the full pipeline.'''

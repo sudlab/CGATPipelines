@@ -1238,7 +1238,7 @@ def runDREME(infile, outfile, neg_file = "", options = ""):
     tmpdir = P.getTempDir(".")
 
     statement = '''
-    dreme-patch -p %(infile)s %(neg_file)s -png
+    dreme -p %(infile)s %(neg_file)s -png
         -oc %(tmpdir)s
             %(dreme_options)s
             %(options)s

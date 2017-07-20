@@ -48,6 +48,7 @@ import glob
 import xml.etree.ElementTree
 import random
 from itertools import izip, product
+import math
 
 import pandas
 import logging as L
@@ -222,7 +223,7 @@ def truncateList(data, track, proportion=None, min_sequences=None, num_sequences
         random.shuffle(data)
 
     if proportion:
-        cutoff = int(len(data) * proportion) + 1
+        cutoff = int(math.ceil(len(data) * proportion))
         if min_sequences:
             cutoff = max(cutoff, min_sequences)
     elif num_sequences:

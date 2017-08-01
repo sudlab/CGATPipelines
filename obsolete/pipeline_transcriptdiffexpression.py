@@ -1141,7 +1141,7 @@ else:
 # enable multiple fastqs from the same sample to be analysed together
 if "merge_pattern_input" in PARAMS and PARAMS["merge_pattern_input"]:
     SEQUENCEFILES_REGEX = regex(
-        r"%s/%s\.(fastq.1.gz|fastq.gz|sra)" % (
+        r"%s/%s\.(fastq.1.gz|fastq.gz|sra|remote)" % (
             DATADIR, PARAMS["merge_pattern_input"].strip()))
     # the last expression counts number of groups in pattern_input
     SEQUENCEFILES_KALLISTO_OUTPUT = r"quant.dir/kallisto/%s/abundance.h5" % (
@@ -1152,7 +1152,7 @@ if "merge_pattern_input" in PARAMS and PARAMS["merge_pattern_input"]:
         PARAMS["merge_pattern_output"].strip())
 else:
     SEQUENCEFILES_REGEX = regex(
-        r".*/(\S+).(fastq.1.gz|fastq.gz|sra)")
+        r".*/(\S+).(fastq.1.gz|fastq.gz|sra|remote)")
     SEQUENCEFILES_KALLISTO_OUTPUT = r"quant.dir/kallisto/\1/abundance.h5"
     SEQUENCEFILES_SALMON_OUTPUT = r"quant.dir/salmon/\1/quant.sf"
     SEQUENCEFILES_SAILFISH_OUTPUT = r"quant.dir/sailfish/\1/quant.sf"

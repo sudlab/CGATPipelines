@@ -396,7 +396,8 @@ def runFeatureCounts(annotations_file,
         paired_processing = ""
 
     # AH: what is the -b option doing?
-    statement = '''mkdir %(tmpdir)s;
+    statement = '''rm -rf %(tmpdir)s;
+                   mkdir %(tmpdir)s;
                    zcat %(annotations_file)s > %(annotations_tmp)s;
                    checkpoint;
                    %(paired_processing)s

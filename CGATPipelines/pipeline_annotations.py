@@ -914,7 +914,7 @@ def buildGenomeGCProfile(infile, outfile):
 @files(os.path.join(PARAMS["genome_dir"], PARAMS["genome"] + ".fasta"),
        PARAMS['interface_cpg_bed'])
 def buildCpGBed(infile, outfile):
-    '''build bed file with CpG locations.'''
+    '''build bed file with CpG locations.
 
     Parameters
     ----------
@@ -951,13 +951,6 @@ def buildCpGBed(infile, outfile):
 # -----------------------------------------------------------------
 # ENSEMBL gene set
 @follows(mkdir('ensembl.dir'))
-<<<<<<< variant A
-@files(PARAMS["ensembl_filename_gtf"], PARAMS['interface_geneset_all_gtf'])
-def buildGeneSet(infile, outfile):
-    '''build a gene set - firstly, reconciles chromosome names by removing
-       those that do not occur in the specified genome assembly;
-       secondly, removes chromosome names specified in pipeline.ini
->>>>>>> variant B
 @files((PARAMS["ensembl_filename_gtf"], PARAMS["general_assembly_report"]), PARAMS['interface_geneset_all_gtf'])
 def buildGeneSet(infiles, outfile):
     '''output sanitized ENSEMBL geneset.
@@ -978,27 +971,6 @@ def buildGeneSet(infiles, outfile):
     outfile : string
        geneset in :term:`gtf` format.
 
-####### Ancestor
-@files(PARAMS["ensembl_filename_gtf"], PARAMS['interface_geneset_all_gtf'])
-def buildGeneSet(infile, outfile):
-    '''output sanitized ENSEMBL geneset.
-
-    This method outputs an ENSEMBL gene set after some sanitizing steps:
-
-    1. Chromosome names are changed to the UCSC convention.
-    2. Transcripts that are not part of the chosen genome assembly
-       are removed.
-    3. Chromosomes that match the regular expression specified in
-       the configuration file are removed.
-
-    Arguments
-    ---------
-    infile : string
-       ENSEMBL geneset in :term:`gtf` format.
-    outfile : string
-       geneset in :term:`gtf` format.
-
-======= end
     '''
     gtf_file, assembly_report = infiles
 
@@ -1143,10 +1115,6 @@ def loadCDSStats(infile, outfile):
 @follows(mkdir('ensembl.dir'))
 @files(buildGeneSet, "ensembl.dir/transcript_info.load")
 def downloadTranscriptInformation(infile, outfile):
-<<<<<<< variant A
-    '''load transcript information.'''
-
->>>>>>> variant B
     '''download information on transcripts from biomart and upload
     into database.
 
@@ -1186,52 +1154,6 @@ def downloadTranscriptInformation(infile, outfile):
        in mart to output table.
     '''
 
-####### Ancestor
-    '''download information on transcripts from biomart and upload
-    into database.
-
-    This method downloads information on transcripts from the
-    :term:`biomart` database and uploads it into the pipelines
-    database. The columns in the mart are mapped to the following
-    columns:
-
-    * ensembl_gene_id: gene_id
-    * ensembl_transcript_id: transcript_id
-    * ensembl_peptide_id: protein_id
-    * gene_biotype: gene_biotype
-    * transcript_biotype: transcript_biotype
-    * source: source
-    * status: gene_status
-    * transcript_status: transcript_status
-    * external_gene_name: gene_name
-
-    Only transcripts within the mart and within the supplied
-    gene set are uploaded.
-
-    Arguments
-    ---------
-    infile : string
-       ENSEMBL geneset in :term:`gtf` format.
-    outfile : string
-       Output filename with logging information. The table name
-       is derived from outfile.
-    ensembl_biomart_mart : PARAMS
-       Biomart mart to use.
-    ensembl_biomart_dataset : PARAMS
-       Biomart dataset to use.
-    ensembl_biomart_host : PARAMS
-       Biomart host to use.
-    genome : PARAMS
-       Genome assembly to use. Used add missing columns
-       in mart to output table.
-    '''
-
-    # If mart is not set, use old fasionhed gtf parsing
-    if not PARAMS["ensembl_biomart_mart"]:
-        PipelineGeneset.loadTranscriptInformation(infile, outfile)
-        return
-
-======= end
     tablename = P.toTable(outfile)
 
     # use the GTF parsing approach to load the transcript information table
@@ -1725,7 +1647,7 @@ def importCpGIslandsFromUCSC(infile, outfile):
 @jobs_limit(PARAMS.get("jobs_limit_db", 1), "db")
 @transform(importRepeatsFromUCSC, suffix(".gff.gz"), ".gff.gz.load")
 def loadRepeats(infile, outfile):
-    '''load total repeats length'''
+    """
 
     This method loads the genomic coordinates (contig, start, end)
     and the repeat name into the database.
@@ -2195,7 +2117,7 @@ def loadKEGGAssignments(infile, outfile):
 @follows(mkdir('enrichment.dir'))
 @files(buildGeneSet, PARAMS['interface_annotation_gff'])
 def annotateGenome(infile, outfile):
-    '''annotate genomic regions with reference gene set.
+    """annotate genomic regions with reference gene set.
 
     Only considers protein coding genes.
     Processed_transcripts tend to cover larger genomic regions

@@ -1094,7 +1094,7 @@ def runMEMEOnSequences(infile, outfile, background=None,
     %(background_model)s
     %(psp_file)s
     %(meme_options)s
-       > %(outfile)s.log
+       2> %(outfile)s.log
     '''
 
     P.run()

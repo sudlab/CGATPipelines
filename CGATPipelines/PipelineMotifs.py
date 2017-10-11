@@ -1084,9 +1084,11 @@ def runMEMEOnSequences(infile, outfile, background=None,
         psp_file = "-psp %s" % psp
     else:
         psp_file = ""
-
+    
+    
     statement = '''
     meme %(infile)s -dna %(revcomp)s
+    -p %(meme_threads)s
     -mod %(meme_model)s
     -nmotifs %(meme_nmotifs)s
     -oc %(tmpdir)s
@@ -1097,6 +1099,16 @@ def runMEMEOnSequences(infile, outfile, background=None,
        2> %(outfile)s.log
     '''
 
+    # If running with more than one thread
+    # http://git.net/ml/clustering.gridengine.users/2007-04/msg00058.html
+    # specify "excl=false -w n -pe openmpi-ib num_threads" in cluster_options
+    # through job_options
+    if int(PARAMS["meme_threads"]) != 1:
+        job_options = str(PARAMS["meme_job_options"])
+        job_threads = int(PARAMS["meme_threads"])
+        cluster_parallel_environment = str(PARAMS["meme_cluster_parallel_environment"])
+    
+     
     P.run()
 
     collectMEMEResults(tmpdir, target_path, outfile)
@@ -1123,11 +1135,22 @@ def runMemeCHIP(infile, outfile, motifs=None):
 
     statement = '''
     meme-chip %(infile)s
+             -p %(meme_threads)s 
              -oc %(tmpdir)s
              -nmeme %(memechip_nmeme)s
              %(memechip_options)s     
              %(motifs)s > %(outfile)s.log '''
-
+    
+    # If running with more than one thread
+    # http://git.net/ml/clustering.gridengine.users/2007-04/msg00058.html
+    # specify "excl=false -w n -pe openmpi-ib num_threads" in cluster_options
+    # through job_options
+    if int(PARAMS["memechip_threads"]) != 1:
+        job_options = str(PARAMS["memechip_job_options"])
+        job_threads = int(PARAMS["memechip_threads"])
+        cluster_parallel_environment = str(PARAMS["memechip_cluster_parallel_environment"])
+     
+    
     P.run()
    
 

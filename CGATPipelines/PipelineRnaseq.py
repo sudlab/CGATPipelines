@@ -438,7 +438,9 @@ class KallistoQuantifier(AF_Quantifier):
         readable_suffix = ".tsv"
         m = PipelineMapping.Kallisto(readable_suffix=readable_suffix)
 
-        statement = m.build((fastqfile,), outfile)
+
+        statement = m.build(fastqfile, outfile)
+        #statement = m.build((fastqfile,), outfile)
 
         P.run()
 
@@ -467,7 +469,7 @@ class SailfishQuantifier(AF_Quantifier):
 
         m = PipelineMapping.Sailfish()
 
-        statement = m.build((fastqfile,), outfile)
+        statement = m.build(fastqfile, outfile)
 
         P.run()
 
@@ -497,7 +499,7 @@ class SalmonQuantifier(AF_Quantifier):
 
         m = PipelineMapping.Salmon(bias_correct=biascorrect)
 
-        statement = m.build((fastqfile,), outfile)
+        statement = m.build(fastqfile, outfile)
 
         P.run()
 

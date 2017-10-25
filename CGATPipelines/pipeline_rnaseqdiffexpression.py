@@ -552,7 +552,7 @@ def buildSalmonIndex(infile, outfile):
        path to output file
     '''
 
-    job_memory = "2G"
+    job_memory = "20G"
 
     # need to remove the index directory (if it exists) as ruffus uses
     # the directory timestamp which wont change even when re-creating
@@ -908,7 +908,7 @@ def runKallisto(infiles, outfiles):
 
     transcript_outfile, gene_outfile = outfiles
     Quantifier = PipelineRnaseq.KallistoQuantifier(
-        infile=fastqfile[0],
+        infile=fastqfile,
         transcript_outfile=transcript_outfile,
         gene_outfile=gene_outfile,
         annotations=index,
@@ -972,7 +972,7 @@ def runSailfish(infiles, outfiles):
 
     transcript_outfile, gene_outfile = outfiles
     Quantifier = PipelineRnaseq.SailfishQuantifier(
-        infile=fastqfile[0],
+        infile=fastqfile,
         transcript_outfile=transcript_outfile,
         gene_outfile=gene_outfile,
         annotations=index,
@@ -1035,7 +1035,7 @@ def runSalmon(infiles, outfiles):
 
     transcript_outfile, gene_outfile = outfiles
     Quantifier = PipelineRnaseq.SalmonQuantifier(
-        infile=fastqfile[0],
+        infile=fastqfile,
         transcript_outfile=transcript_outfile,
         gene_outfile=gene_outfile,
         annotations=index,

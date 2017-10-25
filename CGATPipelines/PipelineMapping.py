@@ -1026,11 +1026,27 @@ class Mapper(SequenceCollectionProcessor):
         if cmd_clean:
             assert cmd_clean.strip().endswith(";"),\
                 "missing ';' at end of command %s" % cmd_clean.strip()
-
-        statement = " checkpoint; ".join((cmd_preprocess,
-                                          cmd_mapper,
-                                          cmd_postprocess,
-                                          cmd_clean))
+        
+        # JAB - Avoid concatenating checkpoints (at both ends of empty statements)
+        statement = ""
+        
+        command_list = [cmd_preprocess, cmd_mapper, cmd_postprocess, cmd_clean]
+        
+        non_empty_command_list = []
+        
+        for command in command_list:
+            
+            if command == "":
+                
+                continue
+            
+            else:
+                
+                non_empty_command_list.append(command)
+            
+            
+        
+        statement = " checkpoint; ".join(non_empty_command_list)
 
         return statement
 

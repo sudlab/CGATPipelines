@@ -340,6 +340,7 @@ def collectSingleJobFromCluster(session, job_id,
     stdout, stderr = getStdoutStderr(stdout_path, stderr_path)
 
     if retval and retval.exitStatus != 0 and not ignore_errors:
+        session.exit()
         raise OSError(
             "---------------------------------------\n"
             "Child was terminated by signal %i: \n"
@@ -350,7 +351,7 @@ def collectSingleJobFromCluster(session, job_id,
 
     if ((retval.hasExited is False or retval.wasAborted is True) and not
        ignore_errors):
-
+        session.exit()
         raise OSError(
             "-------------------------------------------------\n"
             "Cluster job was aborted (%s) and/or failed to exit (%s) "

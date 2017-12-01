@@ -405,7 +405,7 @@ def runFastqScreen(infiles, outfile):
     tempdir = P.getTempDir(".")
     outdir = os.path.join(PARAMS["exportdir"], "fastq_screen")
 
-    job_memory="%fG" %(10.0/PARAMS["fastq_screen_threads"])
+    job_memory="%fG" %(max(10.0/PARAMS["fastq_screen_threads"],2.0))
     job_threads=PARAMS["fastq_screen_threads"]
 
     # Create fastq_screen config file in temp directory
